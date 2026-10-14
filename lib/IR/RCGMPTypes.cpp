@@ -1,5 +1,6 @@
 #include "RCGMP/IR/RCGMPTypes.h"
 
+#include <mlir/Dialect/LLVMIR/LLVMTypes.h>
 #include <mlir/IR/DialectImplementation.h>
 
 namespace mlir::rcgmp {
@@ -15,6 +16,23 @@ Type MpzType::parse(AsmParser &parser) {
 void MpzType::print(AsmPrinter &printer) const {
   if (getAtomic())
     printer << "<atomic>";
+}
+
+llvm::TypeSize MpzType::getTypeSizeInBits(const DataLayout &dataLayout,
+                                          DataLayoutEntryListRef params) const {
+  return dataLayout.getTypeSizeInBits(LLVM::LLVMPointerType::get(getContext()));
+}
+
+uint64_t MpzType::getABIAlignment(const DataLayout &dataLayout,
+                                  DataLayoutEntryListRef params) const {
+  return dataLayout.getTypeABIAlignment(
+      LLVM::LLVMPointerType::get(getContext()));
+}
+
+uint64_t MpzType::getPreferredAlignment(const DataLayout &dataLayout,
+                                        DataLayoutEntryListRef params) const {
+  return dataLayout.getTypePreferredAlignment(
+      LLVM::LLVMPointerType::get(getContext()));
 }
 
 } // namespace mlir::rcgmp

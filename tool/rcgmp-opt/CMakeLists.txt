@@ -1,7 +1,13 @@
 add_llvm_executable(rcgmp-opt main.cpp)
 target_link_libraries(rcgmp-opt PRIVATE
   MLIRRCGMP
+  MLIRRCGMPToLLVM
+  MLIRControlFlowDialect
+  MLIRControlFlowToLLVM
+  MLIRConvertToLLVMPass
+  MLIRDLTIDialect
   MLIRFuncDialect
+  MLIRFuncToLLVM
   MLIROptLib
 )
 mlir_check_all_link_libraries(rcgmp-opt)

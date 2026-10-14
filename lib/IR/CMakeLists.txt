@@ -3,5 +3,9 @@ add_mlir_dialect_library(MLIRRCGMP
   RCGMPTypes.cpp
 
   DEPENDS RCGMPIncGen
-  LINK_LIBS PUBLIC MLIRIR MLIRSupport
+  LINK_LIBS PUBLIC
+    MLIRIR
+    MLIRSupport
+    MLIRDataLayoutInterfaces
+    MLIRLLVMDialect
 )

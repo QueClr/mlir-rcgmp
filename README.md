@@ -8,8 +8,12 @@ The initial scaffold declares two integer types:
 - `!rcgmp.mpz`: nonatomic reference counting.
 - `!rcgmp.mpz<atomic>`: atomic reference counting.
 
-Arithmetic operations, ownership operations, and lowering are not implemented
-yet. The planned runtime uses explicit ownership, inline small integers, and
+Both types lower to `!llvm.ptr` in address space zero. Their size, ABI alignment,
+and preferred alignment follow the pointer data layout. Reference-counting mode
+is a distinction in the source type and does not change the handle's ABI.
+
+Arithmetic and ownership operations are not implemented yet. The planned
+runtime uses explicit ownership, inline small integers, and
 GMP's low-level `mpn` API over limbs stored alongside the reference-count header.
 
 ## Build
@@ -36,6 +40,7 @@ Use `-DGMP_ROOT=/path/to/gmp` for a custom GMP prefix, or set
 ## Structure
 
 - `include/RCGMP/IR`, `lib/IR`: TableGen declarations and dialect implementation.
+- `include/RCGMP/Conversion`, `lib/Conversion`: LLVM type conversion interface.
 - `tool/rcgmp-opt`: MLIR parser and optimization driver.
 - `runtime`: C/C++ runtime dependency target, `RCGMP::Runtime`.
 - `cmake/FindGMP.cmake`: GMP discovery and the imported `GMP::GMP` target.
@@ -44,6 +49,24 @@ Use `-DGMP_ROOT=/path/to/gmp` for a custom GMP prefix, or set
 The runtime dependency target links `libgmp` through `GMP::GMP`. It does not
 require the separate `gmpxx` C++ wrapper library. The dialect library itself
 does not depend on GMP.
+
+## Type lowering
+
+The intended lowering path is `rcgmp` to `scf` plus `rcgmp.bridge.*`, then to
+the LLVM dialect and LLVM IR. The `mpz` types remain intact through the SCF
+stage; low-level bridge operations and types are converted at the LLVM stage.
+This implementation provides only the final type conversion.
+
+`rcgmp-opt --convert-to-llvm input.mlir` lowers function signatures, calls,
+returns, and control-flow block arguments containing `mpz` types through MLIR's
+generic LLVM conversion pass. Embedders can register
+`registerConvertRCGMPToLLVMInterface` or add
+`populateRCGMPToLLVMTypeConversions` to their own `LLVMTypeConverter`.
+
+The pointer is an opaque handle, which may eventually encode an immediate
+integer. It must not be assumed dereferenceable or heap-aligned without a tag
+check. Future tagged arithmetic will use integers matching the pointer's bit
+width, independently of the configurable lowering width of `index`.
 
 ## License
 

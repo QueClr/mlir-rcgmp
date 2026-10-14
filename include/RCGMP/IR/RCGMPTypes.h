@@ -2,6 +2,7 @@
 #define RCGMP_IR_TYPES_H
 
 #include <mlir/IR/Types.h>
+#include <mlir/Interfaces/DataLayoutInterfaces.h>
 
 #include "RCGMP/IR/RCGMPDialect.h"
 

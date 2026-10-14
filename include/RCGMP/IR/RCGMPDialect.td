@@ -13,6 +13,7 @@ def RCGMPDialect : Dialect {
     counting. Arithmetic and ownership operations are not yet implemented.
   }];
   let useDefaultTypePrinterParser = 1;
+  let dependentDialects = ["::mlir::LLVM::LLVMDialect"];
 }
 
 #endif
