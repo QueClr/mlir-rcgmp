@@ -9,6 +9,26 @@ class RCGMPBridgeOp<string name, list<Trait> traits = []>
   let cppNamespace = "::mlir::rcgmp::bridge";
 }
 
+// Generic integer arithmetic, independent of the mpz representation.
+def RCGMP_AddSIExtendedOp : RCGMPBridgeOp<"addsi_extended", [Pure, Commutative,
+    AllTypesMatch<["lhs", "rhs", "sum"]>]> {
+  let summary = "Add signed integers and report signed overflow";
+  let description = [{
+    The sum is the low N bits of the mathematical sum of the N-bit operands.
+    Overflow is true when that mathematical sum does not fit a signed N-bit
+    integer. Both results are defined even on overflow. Unlike an addition
+    carrying `nsw`, overflowing does not produce poison.
+
+    This is the scalar signed counterpart of `arith.addui_extended` and lowers
+    directly to `llvm.sadd.with.overflow`. It does not inspect mpz tags or change
+    ownership, and can be used by any arithmetic lowering needing a checked sum.
+  }];
+  let arguments = (ins AnySignlessInteger:$lhs, AnySignlessInteger:$rhs);
+  let results = (outs AnySignlessInteger:$sum, I1:$overflow);
+  let assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($sum) `,` type($overflow)";
+}
+
+// mpz representation and reference-count primitives.
 def RCGMP_MpzIsImmediateOp : RCGMPBridgeOp<"mpz.is_immediate", [Pure]> {
   let summary = "Test the immediate tag without accessing memory";
   let arguments = (ins RCGMP_MpzType:$value);

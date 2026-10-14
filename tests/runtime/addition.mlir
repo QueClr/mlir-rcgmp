@@ -5,12 +5,10 @@
 // SCF-LABEL: func.func @add_local
 // SCF: %[[L:.*]] = rcgmp.bridge.mpz.to_bits
 // SCF: %[[R:.*]] = rcgmp.bridge.mpz.to_bits
-// The checked sum must wrap; in particular it must not carry nsw/nuw.
-// SCF: %[[SUM:.*]] = arith.addi %[[L]], %[[R]] : i64
-// SCF: arith.xori %[[L]], %[[SUM]]
-// SCF: arith.xori %[[R]], %[[SUM]]
+// The checked sum remains defined on signed overflow.
+// SCF: %[[SUM:.*]], %[[OVERFLOW:.*]] = rcgmp.bridge.addsi_extended %[[L]], %[[R]] : i64, i1
+// SCF: arith.xori %[[OVERFLOW]]
 // SCF: arith.andi
-// SCF: arith.cmpi sge
 // SCF: arith.cmpi eq
 // SCF: scf.if
 // SCF: rcgmp.bridge.mpz.from_bits
@@ -29,7 +27,9 @@
 // LLVM-LABEL: llvm.func @add_local
 // LLVM: %[[LL:.*]] = llvm.ptrtoint
 // LLVM: %[[RR:.*]] = llvm.ptrtoint
-// LLVM: llvm.add %[[LL]], %[[RR]] : i64
+// LLVM: %[[PAIR:.*]] = "llvm.intr.sadd.with.overflow"(%[[LL]], %[[RR]]) : (i64, i64) -> !llvm.struct<(i64, i1)>
+// LLVM: llvm.extractvalue %[[PAIR]][0]
+// LLVM: llvm.extractvalue %[[PAIR]][1]
 // LLVM: llvm.xor
 // LLVM: llvm.and
 // LLVM: llvm.cond_br

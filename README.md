@@ -61,9 +61,12 @@ Use `-DGMP_ROOT=/path/to/gmp` for a custom GMP prefix, or set
 ## Structure
 
 - `include/RCGMP/IR/RCGMPOps.td`: public operations and ownership contracts.
-- `include/RCGMP/IR/RCGMPBridgeOps.td`: low-level `rcgmp.bridge.mpz.*` operations,
-  with `Mpz*Op` C++ classes in `mlir::rcgmp::bridge`.
+- `include/RCGMP/IR/RCGMPBridgeOps.td`: low-level `rcgmp.bridge.*` operations,
+  with generic integer primitives and separate `mpz.*` representation primitives
+  in `mlir::rcgmp::bridge`.
 - `lib/Conversion/ConvertRCGMPToSCF.cpp`: public operations to SCF and bridges.
+- `lib/Conversion/BinaryLowering.h`: shared binary-operation lowering, including
+  runtime declarations, fast/slow branching, and operand reuse checks.
 - `lib/Conversion/ConvertRCGMPBridgeToLLVM.cpp`: bridges to LLVM instructions
   and runtime calls.
 - `lib/Conversion/ConvertRCGMPToLLVM.cpp`: type conversion and registration.
@@ -99,17 +102,20 @@ acquire fence. Reference-count overflow aborts. Atomic counting does not permit
 retaining a borrowed value after its last owning reference has been released.
 
 Addition uses the unchecked `rcgmp.bridge.mpz.to_bits` and `from_bits`
-representation casts. The SCF pass expresses wrapping addition, signed-overflow
-checks, tag checks, and tag restoration using ordinary `arith` operations.
-These generic casts can support other arithmetic operations without adding an
-operation-specific bridge. Their widths must match the pointer data layout.
+representation casts. The SCF pass uses `rcgmp.bridge.addsi_extended` for the
+wrapped sum and signed-overflow flag, with ordinary `arith` operations for tag
+checks and restoration. The bridge is a generic scalar signed counterpart of
+`arith.addui_extended`, independent of mpz representation, and lowers directly
+to `llvm.sadd.with.overflow`. No overflow-recognition pass is needed.
+The casts support other arithmetic operations; their widths must match the
+pointer data layout.
 Only valid representations may be reconstructed; the casts never create an
 owned heap reference or alter reference counts.
 
 Tagged addition tests bit 1 of the sum to identify an immediate pair, then uses
 XOR with 3 to restore the tag. This follows the tagged arithmetic approach in
 [Koka's integer runtime](https://github.com/koka-lang/koka/blob/dev/kklib/include/kklib/integer.h).
-The potentially overflowing sum has no overflow flags. Packing the bounded reuse
+The checked sum remains defined on overflow. Packing the bounded reuse
 flags uses `nuw` and `nsw`. The immediate fast path does not access memory or call
 the runtime.
 

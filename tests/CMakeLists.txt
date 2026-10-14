@@ -54,5 +54,6 @@ if(RCGMP_RUNTIME_DEFAULT_ALLOCATOR)
 endif()
 
 rcgmp_native_test(addition)
+rcgmp_native_test(signed-add)
 find_package(Threads REQUIRED)
 target_link_libraries(rcgmp-addition PRIVATE Threads::Threads)

@@ -61,6 +61,24 @@ LLVM::CallOp runtimeCall(ConversionPatternRewriter &rewriter, Operation *op,
   return LLVM::CallOp::create(rewriter, op->getLoc(), function, arguments);
 }
 
+struct AddSIExtendedLowering : OpConversionPattern<AddSIExtendedOp> {
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(AddSIExtendedOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto pair = LLVM::LLVMStructType::getLiteral(
+        op.getContext(), {adaptor.getLhs().getType(), rewriter.getI1Type()});
+    auto checked = LLVM::SAddWithOverflowOp::create(
+        rewriter, op.getLoc(), pair, adaptor.getLhs(), adaptor.getRhs());
+    auto sum = LLVM::ExtractValueOp::create(rewriter, op.getLoc(), checked,
+                                            ArrayRef<int64_t>{0});
+    auto overflow = LLVM::ExtractValueOp::create(rewriter, op.getLoc(), checked,
+                                                 ArrayRef<int64_t>{1});
+    rewriter.replaceOp(op, {sum.getResult(), overflow.getResult()});
+    return success();
+  }
+};
+
 struct IsImmediateLowering : OpConversionPattern<MpzIsImmediateOp> {
   using OpConversionPattern::OpConversionPattern;
   LogicalResult
@@ -291,12 +309,12 @@ struct IsUniqueLowering : OpConversionPattern<MpzIsUniqueOp> {
 
 void populateRCGMPBridgeToLLVMConversionPatterns(LLVMTypeConverter &converter,
                                                  RewritePatternSet &patterns) {
-  patterns
-      .add<IsImmediateLowering, FitsImmediateLowering, FromImmediateLowering,
-           PromoteLowering, RefCountLowering<MpzIncRefOp, true>,
-           RefCountLowering<MpzDecRefOp, false>, FreeLowering, ToBitsLowering,
-           FromBitsLowering, IsUniqueLowering>(converter,
-                                               patterns.getContext());
+  patterns.add<AddSIExtendedLowering, IsImmediateLowering,
+               FitsImmediateLowering, FromImmediateLowering, PromoteLowering,
+               RefCountLowering<MpzIncRefOp, true>,
+               RefCountLowering<MpzDecRefOp, false>, FreeLowering,
+               ToBitsLowering, FromBitsLowering, IsUniqueLowering>(
+      converter, patterns.getContext());
 }
 
 } // namespace mlir::rcgmp

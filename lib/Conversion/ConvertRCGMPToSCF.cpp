@@ -84,16 +84,12 @@ struct AddILowering : BinaryLowering<AddILowering> {
   static BinaryFastPath buildFastPath(PatternRewriter &rewriter, Location loc,
                                       Value lhs, Value rhs) {
     unsigned width = cast<IntegerType>(lhs.getType()).getWidth();
-    // This sum must wrap: overflow is a slow-path condition, not undefined
-    // behavior.
-    auto sum = arith::AddIOp::create(rewriter, loc, lhs, rhs);
-    // Signed overflow iff both operand signs differ from the sum's sign.
-    auto lhsChanged = arith::XOrIOp::create(rewriter, loc, lhs, sum);
-    auto rhsChanged = arith::XOrIOp::create(rewriter, loc, rhs, sum);
-    auto changed = arith::AndIOp::create(rewriter, loc, lhsChanged, rhsChanged);
-    auto zero = arith::ConstantIntOp::create(rewriter, loc, 0, width);
-    auto fits = arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::sge,
-                                      changed, zero);
+    auto checked = bridge::AddSIExtendedOp::create(
+        rewriter, loc, lhs.getType(), rewriter.getI1Type(), lhs, rhs);
+    Value sum = checked.getSum();
+    auto one = arith::ConstantIntOp::create(rewriter, loc, 1, 1);
+    auto fits =
+        arith::XOrIOp::create(rewriter, loc, checked.getOverflow(), one);
     // 4*x+1 + 4*y+1 has bit 1 set iff both handles are immediate.
     auto two = arith::ConstantIntOp::create(rewriter, loc, 2, width);
     auto tag = arith::AndIOp::create(rewriter, loc, sum, two);
