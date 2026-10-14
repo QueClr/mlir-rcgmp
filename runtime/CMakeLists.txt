@@ -1,5 +1,5 @@
 option(RCGMP_RUNTIME_DEFAULT_ALLOCATOR "Provide malloc/free allocation hooks" ON)
-add_library(RCGMPRuntime STATIC Mpz.c MpzAdd.c)
+add_library(RCGMPRuntime STATIC Mpz.c MpzAdd.c MpzMul.c MpzBitwise.c)
 if(RCGMP_RUNTIME_DEFAULT_ALLOCATOR)
   target_sources(RCGMPRuntime PRIVATE Allocation.c)
 endif()

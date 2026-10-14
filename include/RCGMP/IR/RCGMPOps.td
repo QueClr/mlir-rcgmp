@@ -42,4 +42,42 @@ def RCGMP_AddIOp : RCGMPOp<"addi", [SameOperandsAndResultType, Commutative]> {
   let assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($result)";
 }
 
+class RCGMP_BinaryOp<string name, string semantics, list<Trait> traits = []>
+    : RCGMPOp<name, !listconcat([SameOperandsAndResultType], traits)> {
+  let arguments = (ins RCGMP_MpzType:$lhs, RCGMP_MpzType:$rhs);
+  let results = (outs RCGMP_MpzType:$result);
+  let assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($result)";
+  let description = [{
+    Each operand position consumes one owned reference; aliased heap operands
+    require two references. The result owns one reference. A uniquely owned
+    operand may supply result storage; shared operands retain their values.
+  }] # semantics;
+}
+
+def RCGMP_SubIOp : RCGMP_BinaryOp<"subi", [{
+    Subtraction is exact, with no fixed-width overflow.
+  }]> {
+  let summary = "Consume two integer references and produce lhs minus rhs";
+}
+
+def RCGMP_MulIOp : RCGMP_BinaryOp<"muli", [{
+    Multiplication is exact, with no fixed-width overflow.
+  }], [Commutative]> {
+  let summary = "Consume two integer references and produce their product";
+}
+
+def RCGMP_AndIOp : RCGMP_BinaryOp<"andi", [{
+    Operands are interpreted as infinite two's-complement bit strings, including
+    sign extension for negative integers.
+  }], [Commutative]> {
+  let summary = "Consume two integer references and produce their bitwise AND";
+}
+
+def RCGMP_XOrIOp : RCGMP_BinaryOp<"xori", [{
+    Operands are interpreted as infinite two's-complement bit strings, including
+    sign extension for negative integers.
+  }], [Commutative]> {
+  let summary = "Consume two integer references and produce their bitwise XOR";
+}
+
 #endif

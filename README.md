@@ -15,7 +15,18 @@ is a distinction in the source type and does not change the handle's ABI.
 Ownership is explicit: `rcgmp.from_int` creates an owned reference,
 `rcgmp.retain` borrows a value and returns an additional owned reference, and
 `rcgmp.release` consumes one reference. Retains and releases of small integers
-are no-ops. `rcgmp.addi` consumes two references and returns their exact sum.
+are no-ops. Binary operations consume two references and return one owned result:
+
+| Operation | Result |
+| --- | --- |
+| `rcgmp.addi` | Exact sum |
+| `rcgmp.subi` | Exact difference, lhs minus rhs |
+| `rcgmp.muli` | Exact product |
+| `rcgmp.andi` | Bitwise AND with infinite two's-complement semantics |
+| `rcgmp.xori` | Bitwise XOR with infinite two's-complement semantics |
+
+Both operands and the result must have the same reference-counting mode.
+Aliased heap operands require one owned reference per operand position.
 
 ```mlir
 %integer = rcgmp.from_int %input : i64 to !rcgmp.mpz
@@ -119,6 +130,16 @@ The checked sum remains defined on overflow. Packing the bounded reuse
 flags uses `nuw` and `nsw`. The immediate fast path does not access memory or call
 the runtime.
 
+The other binary operations share the same lowering template. Subtraction uses
+`rcgmp.bridge.subsi_extended` and restores the low tag bit. Multiplication checks
+the signed product of one decoded payload and the other payload scaled by four;
+it fits a native word exactly when the result fits the immediate range.
+`rcgmp.bridge.mulsi_overflow` lowers to `llvm.smul.with.overflow`, returning a
+wrapped product and an overflow flag. This differs from `arith.mulsi_extended`,
+whose second result is the high half. Bitwise AND works directly on tagged
+immediates; XOR restores the low tag bit afterward. Neither bitwise operation
+can overflow the immediate range when both operands are immediate.
+
 The slow branch checks heap uniqueness with `rcgmp.bridge.mpz.is_unique`, then
 packs reuse permissions with `arith` and makes an ordinary `func.call` to
 `rcgmp_mpz_add` or `rcgmp_mpz_add_atomic`. Separate entry points preserve the
@@ -131,6 +152,16 @@ mixed heap/immediate inputs. New allocations reserve growth capacity, and result
 that fit the immediate range release their heap storage. The public operation
 has consuming ownership semantics; the representation casts do not change
 ownership.
+
+Subtraction shares the signed-magnitude addition engine, negating the rhs view
+without changing its storage. Multiplication uses `mpn_mul_1` for a single-limb
+multiplier, with a shift for powers of two, and can reuse a unique operand with
+enough capacity. General multiplication uses `mpn_mul` or `mpn_sqr` and allocates
+a separate destination to satisfy their non-overlap requirements. Bitwise
+operations use `mpn_and_n`/`mpn_xor_n` for nonnegative operands. Negative operands
+are converted a limb at a time to and from two's complement, allowing either
+unique input to be reused without temporary operand allocations. Each operation
+has separate atomic and nonatomic runtime entry points.
 
 ## Custom allocation
 

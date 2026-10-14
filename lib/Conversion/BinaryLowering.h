@@ -77,6 +77,17 @@ template <typename Derived> struct BinaryLowering : RewritePattern {
     return success();
   }
 
+protected:
+  static Value bothImmediate(PatternRewriter &rewriter, Location loc, Value lhs,
+                             Value rhs) {
+    auto common = arith::AndIOp::create(rewriter, loc, lhs, rhs);
+    auto one = arith::ConstantIntOp::create(
+        rewriter, loc, 1, cast<IntegerType>(lhs.getType()).getWidth());
+    auto tag = arith::AndIOp::create(rewriter, loc, common, one);
+    return arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::eq, tag,
+                                 one);
+  }
+
 private:
   // A heap check must dominate each uniqueness load.
   static Value canReuse(PatternRewriter &rewriter, Location loc, Value value) {

@@ -25,4 +25,20 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<!llvm.ptr, dense<
     %r = rcgmp.addi %x, %y : !rcgmp.mpz<atomic>
     return %r : !rcgmp.mpz<atomic>
   }
+  // CHECK-LABEL: llvm.func @sub
+  // CHECK: "llvm.intr.ssub.with.overflow"{{.*}} : (i32, i32) -> !llvm.struct<(i32, i1)>
+  // CHECK: llvm.inttoptr {{.*}} : i32 to !llvm.ptr
+  // CHECK: llvm.load {{.*}} atomic acquire {{.*}} : !llvm.ptr -> i32
+  func.func @sub(%x: !rcgmp.mpz<atomic>, %y: !rcgmp.mpz<atomic>) -> !rcgmp.mpz<atomic> {
+    %r = rcgmp.subi %x, %y : !rcgmp.mpz<atomic>
+    return %r : !rcgmp.mpz<atomic>
+  }
+  // CHECK-LABEL: llvm.func @mul
+  // CHECK: "llvm.intr.smul.with.overflow"{{.*}} : (i32, i32) -> !llvm.struct<(i32, i1)>
+  // CHECK: llvm.inttoptr {{.*}} : i32 to !llvm.ptr
+  // CHECK: llvm.load {{.*}} atomic acquire {{.*}} : !llvm.ptr -> i32
+  func.func @mul(%x: !rcgmp.mpz<atomic>, %y: !rcgmp.mpz<atomic>) -> !rcgmp.mpz<atomic> {
+    %r = rcgmp.muli %x, %y : !rcgmp.mpz<atomic>
+    return %r : !rcgmp.mpz<atomic>
+  }
 }

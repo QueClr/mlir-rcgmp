@@ -28,6 +28,35 @@ def RCGMP_AddSIExtendedOp : RCGMPBridgeOp<"addsi_extended", [Pure, Commutative,
   let assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($sum) `,` type($overflow)";
 }
 
+def RCGMP_SubSIExtendedOp : RCGMPBridgeOp<"subsi_extended", [Pure,
+    AllTypesMatch<["lhs", "rhs", "diff"]>]> {
+  let summary = "Subtract signed integers and report signed overflow";
+  let description = [{
+    Return the low N bits of lhs minus rhs and a flag indicating whether the
+    mathematical difference does not fit a signed N-bit integer. Both results
+    remain defined on overflow. This scalar signed counterpart of
+    `arith.subui_extended` lowers to `llvm.ssub.with.overflow`.
+  }];
+  let arguments = (ins AnySignlessInteger:$lhs, AnySignlessInteger:$rhs);
+  let results = (outs AnySignlessInteger:$diff, I1:$overflow);
+  let assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($diff) `,` type($overflow)";
+}
+
+def RCGMP_MulSIOverflowOp : RCGMPBridgeOp<"mulsi_overflow", [Pure, Commutative,
+    AllTypesMatch<["lhs", "rhs", "product"]>]> {
+  let summary = "Multiply signed integers and report signed overflow";
+  let description = [{
+    Return the low N bits of the mathematical product and a flag indicating
+    whether the product does not fit a signed N-bit integer. Both results remain
+    defined on overflow. Unlike `arith.mulsi_extended`, the second result is an
+    overflow flag rather than the high half. This scalar operation lowers
+    directly to `llvm.smul.with.overflow`.
+  }];
+  let arguments = (ins AnySignlessInteger:$lhs, AnySignlessInteger:$rhs);
+  let results = (outs AnySignlessInteger:$product, I1:$overflow);
+  let assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($product) `,` type($overflow)";
+}
+
 // mpz representation and reference-count primitives.
 def RCGMP_MpzIsImmediateOp : RCGMPBridgeOp<"mpz.is_immediate", [Pure]> {
   let summary = "Test the immediate tag without accessing memory";

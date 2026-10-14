@@ -102,6 +102,95 @@ struct AddILowering : BinaryLowering<AddILowering> {
   }
 };
 
+struct SubILowering : BinaryLowering<SubILowering> {
+  using BinaryLowering::BinaryLowering;
+  using Op = SubIOp;
+
+  static StringRef getRuntimeName(bool atomic) {
+    return atomic ? "rcgmp_mpz_sub_atomic" : "rcgmp_mpz_sub";
+  }
+
+  static BinaryFastPath buildFastPath(PatternRewriter &rewriter, Location loc,
+                                      Value lhs, Value rhs) {
+    auto checked = bridge::SubSIExtendedOp::create(
+        rewriter, loc, lhs.getType(), rewriter.getI1Type(), lhs, rhs);
+    auto yes = arith::ConstantIntOp::create(rewriter, loc, 1, 1);
+    auto fits =
+        arith::XOrIOp::create(rewriter, loc, checked.getOverflow(), yes);
+    auto both = bothImmediate(rewriter, loc, lhs, rhs);
+    auto valid = arith::AndIOp::create(rewriter, loc, fits, both);
+    auto one = arith::ConstantIntOp::create(
+        rewriter, loc, 1, cast<IntegerType>(lhs.getType()).getWidth());
+    // Subtracting tagged immediates yields 4*(x-y); restore the low tag bit.
+    auto tagged = arith::OrIOp::create(rewriter, loc, checked.getDiff(), one);
+    return {tagged, valid};
+  }
+};
+
+struct MulILowering : BinaryLowering<MulILowering> {
+  using BinaryLowering::BinaryLowering;
+  using Op = MulIOp;
+
+  static StringRef getRuntimeName(bool atomic) {
+    return atomic ? "rcgmp_mpz_mul_atomic" : "rcgmp_mpz_mul";
+  }
+
+  static BinaryFastPath buildFastPath(PatternRewriter &rewriter, Location loc,
+                                      Value lhs, Value rhs) {
+    unsigned width = cast<IntegerType>(lhs.getType()).getWidth();
+    auto two = arith::ConstantIntOp::create(rewriter, loc, 2, width);
+    auto mask = arith::ConstantIntOp::create(rewriter, loc, -4, width);
+    auto x = arith::ShRSIOp::create(rewriter, loc, lhs, two);
+    auto scaledY = arith::AndIOp::create(rewriter, loc, rhs, mask);
+    // x * (4*y) fits the signed word iff x*y fits the immediate payload.
+    // The checked product remains defined for arbitrary heap-handle bits.
+    auto product = bridge::MulSIOverflowOp::create(
+        rewriter, loc, lhs.getType(), rewriter.getI1Type(), x, scaledY);
+    auto yes = arith::ConstantIntOp::create(rewriter, loc, 1, 1);
+    auto fits =
+        arith::XOrIOp::create(rewriter, loc, product.getOverflow(), yes);
+    auto both = bothImmediate(rewriter, loc, lhs, rhs);
+    auto valid = arith::AndIOp::create(rewriter, loc, fits, both);
+    auto one = arith::ConstantIntOp::create(rewriter, loc, 1, width);
+    auto tagged =
+        arith::OrIOp::create(rewriter, loc, product.getProduct(), one);
+    return {tagged, valid};
+  }
+};
+
+struct AndILowering : BinaryLowering<AndILowering> {
+  using BinaryLowering::BinaryLowering;
+  using Op = AndIOp;
+
+  static StringRef getRuntimeName(bool atomic) {
+    return atomic ? "rcgmp_mpz_and_atomic" : "rcgmp_mpz_and";
+  }
+
+  static BinaryFastPath buildFastPath(PatternRewriter &rewriter, Location loc,
+                                      Value lhs, Value rhs) {
+    auto bits = arith::AndIOp::create(rewriter, loc, lhs, rhs);
+    return {bits, bothImmediate(rewriter, loc, lhs, rhs)};
+  }
+};
+
+struct XOrILowering : BinaryLowering<XOrILowering> {
+  using BinaryLowering::BinaryLowering;
+  using Op = XOrIOp;
+
+  static StringRef getRuntimeName(bool atomic) {
+    return atomic ? "rcgmp_mpz_xor_atomic" : "rcgmp_mpz_xor";
+  }
+
+  static BinaryFastPath buildFastPath(PatternRewriter &rewriter, Location loc,
+                                      Value lhs, Value rhs) {
+    auto bits = arith::XOrIOp::create(rewriter, loc, lhs, rhs);
+    auto one = arith::ConstantIntOp::create(
+        rewriter, loc, 1, cast<IntegerType>(lhs.getType()).getWidth());
+    auto tagged = arith::OrIOp::create(rewriter, loc, bits, one);
+    return {tagged, bothImmediate(rewriter, loc, lhs, rhs)};
+  }
+};
+
 struct ConvertRCGMPToSCFPass
     : PassWrapper<ConvertRCGMPToSCFPass, OperationPass<ModuleOp>> {
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(ConvertRCGMPToSCFPass)
@@ -115,11 +204,12 @@ struct ConvertRCGMPToSCFPass
   }
   void runOnOperation() override {
     RewritePatternSet patterns(&getContext());
-    patterns
-        .add<FromIntLowering, RetainLowering, ReleaseLowering, AddILowering>(
-            &getContext());
+    patterns.add<FromIntLowering, RetainLowering, ReleaseLowering, AddILowering,
+                 SubILowering, MulILowering, AndILowering, XOrILowering>(
+        &getContext());
     ConversionTarget target(getContext());
-    target.addIllegalOp<FromIntOp, RetainOp, ReleaseOp, AddIOp>();
+    target.addIllegalOp<FromIntOp, RetainOp, ReleaseOp, AddIOp, SubIOp, MulIOp,
+                        AndIOp, XOrIOp>();
     target.markUnknownOpDynamicallyLegal([](Operation *) { return true; });
     if (failed(applyPartialConversion(getOperation(), target,
                                       std::move(patterns))))

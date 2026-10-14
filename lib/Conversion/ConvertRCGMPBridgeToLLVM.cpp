@@ -61,15 +61,16 @@ LLVM::CallOp runtimeCall(ConversionPatternRewriter &rewriter, Operation *op,
   return LLVM::CallOp::create(rewriter, op->getLoc(), function, arguments);
 }
 
-struct AddSIExtendedLowering : OpConversionPattern<AddSIExtendedOp> {
-  using OpConversionPattern::OpConversionPattern;
+template <typename Op, typename LLVMOp>
+struct SignedOverflowLowering : OpConversionPattern<Op> {
+  using OpConversionPattern<Op>::OpConversionPattern;
   LogicalResult
-  matchAndRewrite(AddSIExtendedOp op, OpAdaptor adaptor,
+  matchAndRewrite(Op op, typename Op::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto pair = LLVM::LLVMStructType::getLiteral(
         op.getContext(), {adaptor.getLhs().getType(), rewriter.getI1Type()});
-    auto checked = LLVM::SAddWithOverflowOp::create(
-        rewriter, op.getLoc(), pair, adaptor.getLhs(), adaptor.getRhs());
+    auto checked = LLVMOp::create(rewriter, op.getLoc(), pair, adaptor.getLhs(),
+                                  adaptor.getRhs());
     auto sum = LLVM::ExtractValueOp::create(rewriter, op.getLoc(), checked,
                                             ArrayRef<int64_t>{0});
     auto overflow = LLVM::ExtractValueOp::create(rewriter, op.getLoc(), checked,
@@ -309,12 +310,15 @@ struct IsUniqueLowering : OpConversionPattern<MpzIsUniqueOp> {
 
 void populateRCGMPBridgeToLLVMConversionPatterns(LLVMTypeConverter &converter,
                                                  RewritePatternSet &patterns) {
-  patterns.add<AddSIExtendedLowering, IsImmediateLowering,
-               FitsImmediateLowering, FromImmediateLowering, PromoteLowering,
-               RefCountLowering<MpzIncRefOp, true>,
-               RefCountLowering<MpzDecRefOp, false>, FreeLowering,
-               ToBitsLowering, FromBitsLowering, IsUniqueLowering>(
-      converter, patterns.getContext());
+  patterns
+      .add<SignedOverflowLowering<AddSIExtendedOp, LLVM::SAddWithOverflowOp>,
+           SignedOverflowLowering<SubSIExtendedOp, LLVM::SSubWithOverflowOp>,
+           SignedOverflowLowering<MulSIOverflowOp, LLVM::SMulWithOverflowOp>,
+           IsImmediateLowering, FitsImmediateLowering, FromImmediateLowering,
+           PromoteLowering, RefCountLowering<MpzIncRefOp, true>,
+           RefCountLowering<MpzDecRefOp, false>, FreeLowering, ToBitsLowering,
+           FromBitsLowering, IsUniqueLowering>(converter,
+                                               patterns.getContext());
 }
 
 } // namespace mlir::rcgmp

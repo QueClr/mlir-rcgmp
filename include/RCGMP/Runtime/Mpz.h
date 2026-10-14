@@ -21,6 +21,18 @@ void rcgmp_mpz_release(void *value, uint32_t atomic);
 void *rcgmp_mpz_add(void *lhs, void *rhs, uint32_t reuse);
 void *rcgmp_mpz_add_atomic(void *lhs, void *rhs, uint32_t reuse);
 
+// The same ownership and reuse contract applies to all binary operations.
+// Subtraction and multiplication are exact. Bitwise operations use infinite
+// two's-complement semantics.
+void *rcgmp_mpz_sub(void *lhs, void *rhs, uint32_t reuse);
+void *rcgmp_mpz_sub_atomic(void *lhs, void *rhs, uint32_t reuse);
+void *rcgmp_mpz_mul(void *lhs, void *rhs, uint32_t reuse);
+void *rcgmp_mpz_mul_atomic(void *lhs, void *rhs, uint32_t reuse);
+void *rcgmp_mpz_and(void *lhs, void *rhs, uint32_t reuse);
+void *rcgmp_mpz_and_atomic(void *lhs, void *rhs, uint32_t reuse);
+void *rcgmp_mpz_xor(void *lhs, void *rhs, uint32_t reuse);
+void *rcgmp_mpz_xor_atomic(void *lhs, void *rhs, uint32_t reuse);
+
 // Only for a heap value whose final decrement has already completed.
 void rcgmp_mpz_free(void *value, uint32_t atomic);
 
