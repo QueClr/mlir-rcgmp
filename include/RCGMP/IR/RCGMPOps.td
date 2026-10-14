@@ -29,4 +29,17 @@ def RCGMP_ReleaseOp : RCGMPOp<"release"> {
   let assemblyFormat = "$value attr-dict `:` type($value)";
 }
 
+def RCGMP_AddIOp : RCGMPOp<"addi", [SameOperandsAndResultType, Commutative]> {
+  let summary = "Consume two integer references and produce their sum";
+  let description = [{
+    Each operand position consumes one owned reference. Adding a heap value to
+    itself therefore requires two references, obtained with `rcgmp.retain`.
+    The result owns one reference. A uniquely owned operand may be mutated and
+    reused; shared operands retain their values. Integer addition is exact.
+  }];
+  let arguments = (ins RCGMP_MpzType:$lhs, RCGMP_MpzType:$rhs);
+  let results = (outs RCGMP_MpzType:$result);
+  let assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($result)";
+}
+
 #endif

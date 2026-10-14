@@ -15,5 +15,5 @@ add_mlir_conversion_library(MLIRRCGMPToSCF
   ConvertRCGMPToSCF.cpp
   LINK_LIBS PUBLIC
     MLIRRCGMP MLIRArithDialect MLIRControlFlowDialect MLIRSCFDialect
-    MLIRPass MLIRTransformUtils
+    MLIRFuncDialect MLIRPass MLIRTransformUtils
 )

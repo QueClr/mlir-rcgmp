@@ -17,4 +17,12 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<!llvm.ptr, dense<
     %r = rcgmp.retain %x : !rcgmp.mpz<atomic>
     return %r : !rcgmp.mpz<atomic>
   }
+  // CHECK-LABEL: llvm.func @add
+  // CHECK: llvm.add {{.*}} : i32
+  // CHECK: llvm.inttoptr {{.*}} : i32 to !llvm.ptr
+  // CHECK: llvm.load {{.*}} atomic acquire {{.*}} : !llvm.ptr -> i32
+  func.func @add(%x: !rcgmp.mpz<atomic>, %y: !rcgmp.mpz<atomic>) -> !rcgmp.mpz<atomic> {
+    %r = rcgmp.addi %x, %y : !rcgmp.mpz<atomic>
+    return %r : !rcgmp.mpz<atomic>
+  }
 }

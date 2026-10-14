@@ -68,4 +68,44 @@ def RCGMP_MpzFreeOp : RCGMPBridgeOp<"mpz.free"> {
   let assemblyFormat = "$value attr-dict `:` type($value)";
 }
 
+def RCGMP_MpzToBitsOp : RCGMPBridgeOp<"mpz.to_bits", [Pure]> {
+  let summary = "Reinterpret an mpz handle as its native-width bit pattern";
+  let description = [{
+    This unchecked representation cast preserves the tag; it does not decode an
+    integer payload or change ownership. The result width must equal the handle
+    width from the data layout. It is independent of the width of MLIR index.
+  }];
+  let arguments = (ins RCGMP_MpzType:$value);
+  let results = (outs AnySignlessInteger:$result);
+  let assemblyFormat = "$value attr-dict `:` type($value) `to` type($result)";
+  let hasVerifier = 1;
+}
+
+def RCGMP_MpzFromBitsOp : RCGMPBridgeOp<"mpz.from_bits", [Pure]> {
+  let summary = "Reinterpret native-width bits as an mpz handle without checks";
+  let description = [{
+    No tagging, range checks, allocation, or reference-count changes occur.
+    The input width must equal the handle width from the data layout. The caller
+    must establish a valid tagged immediate or live heap pointer before using
+    the result. Reconstructing a heap handle does not create an owned reference.
+  }];
+  let arguments = (ins AnySignlessInteger:$value);
+  let results = (outs RCGMP_MpzType:$result);
+  let assemblyFormat = "$value attr-dict `:` type($value) `to` type($result)";
+  let hasVerifier = 1;
+}
+
+def RCGMP_MpzIsUniqueOp : RCGMPBridgeOp<"mpz.is_unique"> {
+  let summary = "Test whether a live heap value has exactly one reference";
+  let description = [{
+    The operand must be a heap handle with an owned reference held by the caller.
+    Atomic counts use an acquire load. A true result licenses mutation only
+    while the reference remains exclusive; retaining or publishing an alias
+    invalidates that permission. This operation is not speculatable or pure.
+  }];
+  let arguments = (ins RCGMP_MpzType:$value);
+  let results = (outs I1:$result);
+  let assemblyFormat = "$value attr-dict `:` type($value)";
+}
+
 #endif

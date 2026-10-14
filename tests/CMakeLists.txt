@@ -52,3 +52,7 @@ if(RCGMP_RUNTIME_DEFAULT_ALLOCATOR)
   add_test(NAME rcgmp-construction-default COMMAND rcgmp-construction-default)
   add_dependencies(check-rcgmp rcgmp-construction-default)
 endif()
+
+rcgmp_native_test(addition)
+find_package(Threads REQUIRED)
+target_link_libraries(rcgmp-addition PRIVATE Threads::Threads)

@@ -15,7 +15,7 @@
   } while (0)
 
 #ifdef RCGMP_TEST_ALLOCATOR
-static size_t allocations, deallocations;
+static _Atomic(size_t) allocations, deallocations;
 typedef union {
   max_align_t align;
   struct {

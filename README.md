@@ -15,7 +15,7 @@ is a distinction in the source type and does not change the handle's ABI.
 Ownership is explicit: `rcgmp.from_int` creates an owned reference,
 `rcgmp.retain` borrows a value and returns an additional owned reference, and
 `rcgmp.release` consumes one reference. Retains and releases of small integers
-are no-ops. Arithmetic operations are added separately.
+are no-ops. `rcgmp.addi` consumes two references and returns their exact sum.
 
 ```mlir
 %integer = rcgmp.from_int %input : i64 to !rcgmp.mpz
@@ -28,6 +28,14 @@ rcgmp.release %alias : !rcgmp.mpz
 two's complement by default; `rcgmp.from_int %x unsigned : i64 to !rcgmp.mpz`
 uses unsigned interpretation. Atomicity must remain consistent for all aliases.
 Ownership is a caller contract; the dialect does not yet verify linear use.
+
+For example, doubling consumes the original reference and its retained alias:
+
+```mlir
+%alias = rcgmp.retain %integer : !rcgmp.mpz
+%twice = rcgmp.addi %integer, %alias : !rcgmp.mpz
+rcgmp.release %twice : !rcgmp.mpz
+```
 
 ## Build
 
@@ -89,6 +97,34 @@ Nonatomic reference counts use ordinary loads/stores. Atomic retains use relaxed
 ordering, releases use release ordering, and final destruction performs an
 acquire fence. Reference-count overflow aborts. Atomic counting does not permit
 retaining a borrowed value after its last owning reference has been released.
+
+Addition uses the unchecked `rcgmp.bridge.mpz.to_bits` and `from_bits`
+representation casts. The SCF pass expresses wrapping addition, signed-overflow
+checks, tag checks, and tag restoration using ordinary `arith` operations.
+These generic casts can support other arithmetic operations without adding an
+operation-specific bridge. Their widths must match the pointer data layout.
+Only valid representations may be reconstructed; the casts never create an
+owned heap reference or alter reference counts.
+
+Tagged addition tests bit 1 of the sum to identify an immediate pair, then uses
+XOR with 3 to restore the tag. This follows the tagged arithmetic approach in
+[Koka's integer runtime](https://github.com/koka-lang/koka/blob/dev/kklib/include/kklib/integer.h).
+The potentially overflowing sum has no overflow flags. Packing the bounded reuse
+flags uses `nuw` and `nsw`. The immediate fast path does not access memory or call
+the runtime.
+
+The slow branch checks heap uniqueness with `rcgmp.bridge.mpz.is_unique`, then
+packs reuse permissions with `arith` and makes an ordinary `func.call` to
+`rcgmp_mpz_add` or `rcgmp_mpz_add_atomic`. Separate entry points preserve the
+source types; both use the same C implementation. Atomic uniqueness uses an
+acquire load. The runtime checks capacity and reuses either unique operand
+when possible, otherwise allocating through the configured hooks. It uses
+[GMP's low-level limb operations](https://gmplib.org/manual/Low_002dlevel-Functions)
+for signed-magnitude addition/subtraction, including single-limb operations for
+mixed heap/immediate inputs. New allocations reserve growth capacity, and results
+that fit the immediate range release their heap storage. The public operation
+has consuming ownership semantics; the representation casts do not change
+ownership.
 
 ## Custom allocation
 

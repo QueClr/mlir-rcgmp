@@ -71,3 +71,18 @@ void *rcgmp_mpz_from_words(const uintptr_t *words, size_t count,
   value->size = negative ? -(intptr_t)count : (intptr_t)count;
   return value;
 }
+
+void *rcgmp_mpz_normalize(RCGMPMpz *value, uint32_t atomic) {
+  int negative = value->size < 0;
+  size_t count = negative ? (size_t)-value->size : (size_t)value->size;
+  while (count && value->limbs[count - 1] == 0)
+    --count;
+  if (count == 0 ||
+      (count == 1 && value->limbs[0] <= (uintptr_t)RCGMP_IMM_MAX + negative)) {
+    intptr_t small = count ? (intptr_t)value->limbs[0] : 0;
+    rcgmp_mpz_free(value, atomic);
+    return rcgmp_encode(negative ? -small : small);
+  }
+  value->size = negative ? -(intptr_t)count : (intptr_t)count;
+  return value;
+}

@@ -26,6 +26,8 @@ _Static_assert(_Alignof(RCGMPRefCount) == _Alignof(uintptr_t),
                "RC alignment mismatch");
 _Static_assert(offsetof(RCGMPMpz, limbs) == 3 * sizeof(uintptr_t),
                "MPZ ABI mismatch");
+_Static_assert(_Alignof(RCGMPRefCount) >= sizeof(uintptr_t),
+               "RC requires native-word alignment");
 _Static_assert(_Alignof(RCGMPMpz) >= 4,
                "MPZ tagging requires four-byte alignment");
 
@@ -49,5 +51,6 @@ static inline intptr_t rcgmp_decode(void *value) {
 }
 
 RCGMPMpz *rcgmp_mpz_allocate(size_t capacity, uint32_t atomic);
+void *rcgmp_mpz_normalize(RCGMPMpz *value, uint32_t atomic);
 
 #endif

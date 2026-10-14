@@ -244,6 +244,49 @@ struct FreeLowering : OpConversionPattern<MpzFreeOp> {
   }
 };
 
+struct ToBitsLowering : OpConversionPattern<MpzToBitsOp> {
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(MpzToBitsOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    rewriter.replaceOpWithNewOp<LLVM::PtrToIntOp>(op, op.getType(),
+                                                  adaptor.getValue());
+    return success();
+  }
+};
+
+struct FromBitsLowering : OpConversionPattern<MpzFromBitsOp> {
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(MpzFromBitsOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    rewriter.replaceOpWithNewOp<LLVM::IntToPtrOp>(
+        op, LLVM::LLVMPointerType::get(op.getContext()), adaptor.getValue(),
+        LLVM::DereferenceableAttr{});
+    return success();
+  }
+};
+
+struct IsUniqueLowering : OpConversionPattern<MpzIsUniqueOp> {
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(MpzIsUniqueOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto word = wordType(op);
+    auto count =
+        LLVM::LoadOp::create(rewriter, op.getLoc(), word, adaptor.getValue());
+    if (cast<MpzType>(op.getValue().getType()).getAtomic()) {
+      count.setOrdering(LLVM::AtomicOrdering::acquire);
+      // The heap header has native-word alignment (enforced by the runtime).
+      count.setAlignment(word.getWidth() / 8);
+    }
+    auto one = integerConstant(rewriter, op.getLoc(), word, 1);
+    rewriter.replaceOpWithNewOp<LLVM::ICmpOp>(op, LLVM::ICmpPredicate::eq,
+                                              count, one);
+    return success();
+  }
+};
+
 } // namespace
 
 void populateRCGMPBridgeToLLVMConversionPatterns(LLVMTypeConverter &converter,
@@ -251,8 +294,9 @@ void populateRCGMPBridgeToLLVMConversionPatterns(LLVMTypeConverter &converter,
   patterns
       .add<IsImmediateLowering, FitsImmediateLowering, FromImmediateLowering,
            PromoteLowering, RefCountLowering<MpzIncRefOp, true>,
-           RefCountLowering<MpzDecRefOp, false>, FreeLowering>(
-          converter, patterns.getContext());
+           RefCountLowering<MpzDecRefOp, false>, FreeLowering, ToBitsLowering,
+           FromBitsLowering, IsUniqueLowering>(converter,
+                                               patterns.getContext());
 }
 
 } // namespace mlir::rcgmp

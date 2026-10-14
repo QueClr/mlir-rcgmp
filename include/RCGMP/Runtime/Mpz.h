@@ -15,6 +15,12 @@ void *rcgmp_mpz_from_words(const uintptr_t *words, size_t count,
 void *rcgmp_mpz_retain(void *value, uint32_t atomic);
 void rcgmp_mpz_release(void *value, uint32_t atomic);
 
+// Consume one reference per operand position and return one owned sum.
+// reuse bit 0/1 permits reusing lhs/rhs respectively; set a bit only for a
+// heap operand proven uniquely owned. Both operands must match the entry point.
+void *rcgmp_mpz_add(void *lhs, void *rhs, uint32_t reuse);
+void *rcgmp_mpz_add_atomic(void *lhs, void *rhs, uint32_t reuse);
+
 // Only for a heap value whose final decrement has already completed.
 void rcgmp_mpz_free(void *value, uint32_t atomic);
 
