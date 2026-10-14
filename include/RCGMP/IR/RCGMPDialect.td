@@ -10,7 +10,8 @@ def RCGMPDialect : Dialect {
   let description = [{
     The rcgmp dialect represents reference-counted arbitrary-precision values
     backed by GMP. Integer types distinguish atomic and nonatomic reference
-    counting. Arithmetic and ownership operations are not yet implemented.
+    counting. Structured lowering exposes control flow in SCF while bridge
+    operations preserve representation details until LLVM lowering.
   }];
   let useDefaultTypePrinterParser = 1;
   let dependentDialects = ["::mlir::LLVM::LLVMDialect"];

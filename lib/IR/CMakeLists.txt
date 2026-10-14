@@ -1,6 +1,8 @@
 add_mlir_dialect_library(MLIRRCGMP
   RCGMPDialect.cpp
   RCGMPTypes.cpp
+  RCGMPOps.cpp
+  RCGMPBridgeOps.cpp
 
   DEPENDS RCGMPIncGen
   LINK_LIBS PUBLIC
@@ -8,4 +10,6 @@ add_mlir_dialect_library(MLIRRCGMP
     MLIRSupport
     MLIRDataLayoutInterfaces
     MLIRLLVMDialect
+    MLIRInferTypeOpInterface
+    MLIRSideEffectInterfaces
 )

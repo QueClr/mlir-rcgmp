@@ -3,7 +3,7 @@
 `mlir-rcgmp` provides the `rcgmp` dialect for reference-counted,
 arbitrary-precision arithmetic backed by GMP.
 
-The initial scaffold declares two integer types:
+The dialect provides two integer types:
 
 - `!rcgmp.mpz`: nonatomic reference counting.
 - `!rcgmp.mpz<atomic>`: atomic reference counting.
@@ -12,9 +12,22 @@ Both types lower to `!llvm.ptr` in address space zero. Their size, ABI alignment
 and preferred alignment follow the pointer data layout. Reference-counting mode
 is a distinction in the source type and does not change the handle's ABI.
 
-Arithmetic and ownership operations are not implemented yet. The planned
-runtime uses explicit ownership, inline small integers, and
-GMP's low-level `mpn` API over limbs stored alongside the reference-count header.
+Ownership is explicit: `rcgmp.from_int` creates an owned reference,
+`rcgmp.retain` borrows a value and returns an additional owned reference, and
+`rcgmp.release` consumes one reference. Retains and releases of small integers
+are no-ops. Arithmetic operations are added separately.
+
+```mlir
+%integer = rcgmp.from_int %input : i64 to !rcgmp.mpz
+%alias = rcgmp.retain %integer : !rcgmp.mpz
+rcgmp.release %integer : !rcgmp.mpz
+rcgmp.release %alias : !rcgmp.mpz
+```
+
+`from_int` accepts any signless integer width. It interprets the bits as signed
+two's complement by default; `rcgmp.from_int %x unsigned : i64 to !rcgmp.mpz`
+uses unsigned interpretation. Atomicity must remain consistent for all aliases.
+Ownership is a caller contract; the dialect does not yet verify linear use.
 
 ## Build
 
@@ -39,34 +52,64 @@ Use `-DGMP_ROOT=/path/to/gmp` for a custom GMP prefix, or set
 
 ## Structure
 
-- `include/RCGMP/IR`, `lib/IR`: TableGen declarations and dialect implementation.
-- `include/RCGMP/Conversion`, `lib/Conversion`: LLVM type conversion interface.
-- `tool/rcgmp-opt`: MLIR parser and optimization driver.
-- `runtime`: C/C++ runtime dependency target, `RCGMP::Runtime`.
-- `cmake/FindGMP.cmake`: GMP discovery and the imported `GMP::GMP` target.
-- `tests`: type syntax diagnostics and executable GMP linkage checks.
+- `include/RCGMP/IR/RCGMPOps.td`: public operations and ownership contracts.
+- `include/RCGMP/IR/RCGMPBridgeOps.td`: low-level `rcgmp.bridge.mpz.*` operations,
+  with `Mpz*Op` C++ classes in `mlir::rcgmp::bridge`.
+- `lib/Conversion/ConvertRCGMPToSCF.cpp`: public operations to SCF and bridges.
+- `lib/Conversion/ConvertRCGMPBridgeToLLVM.cpp`: bridges to LLVM instructions
+  and runtime calls.
+- `lib/Conversion/ConvertRCGMPToLLVM.cpp`: type conversion and registration.
+- `runtime`: C runtime, linked as `RCGMP::Runtime`.
+- `tests`: IR checks and native tests compiled through the complete lowering.
 
-The runtime dependency target links `libgmp` through `GMP::GMP`. It does not
-require the separate `gmpxx` C++ wrapper library. The dialect library itself
-does not depend on GMP.
+## Lowering and representation
 
-## Type lowering
+```sh
+rcgmp-opt input.mlir -convert-rcgmp-to-scf -convert-scf-to-cf \
+  -convert-to-llvm -reconcile-unrealized-casts | mlir-translate --mlir-to-llvmir
+```
 
-The intended lowering path is `rcgmp` to `scf` plus `rcgmp.bridge.*`, then to
-the LLVM dialect and LLVM IR. The `mpz` types remain intact through the SCF
-stage; low-level bridge operations and types are converted at the LLVM stage.
-This implementation provides only the final type conversion.
+The SCF stage keeps `mpz` types and makes tag checks, promotion, and reference
+count decisions explicit. Bridge operations have preconditions documented in
+TableGen; they are implementation primitives, not ownership-safe public APIs.
+The LLVM stage converts handles to pointers, inlines tagging and reference
+counts, and calls the runtime for allocation and deallocation. Embedders can
+register `registerConvertRCGMPToLLVMInterface` with the generic LLVM conversion
+pass or populate type and bridge conversions separately.
 
-`rcgmp-opt --convert-to-llvm input.mlir` lowers function signatures, calls,
-returns, and control-flow block arguments containing `mpz` types through MLIR's
-generic LLVM conversion pass. Embedders can register
-`registerConvertRCGMPToLLVMInterface` or add
-`populateRCGMPToLLVMTypeConversions` to their own `LLVMTypeConverter`.
+A handle encodes small integers as `4*n + 1`. With a W-bit pointer, the immediate
+range is `[-2^(W-3), 2^(W-3)-1]`. Tag arithmetic uses the pointer width from the
+data layout, independently of `index`. Heap handles point directly to one
+allocation containing a reference count, signed limb count, capacity, and
+trailing GMP limbs. There is no separate `mpz_t` or limb allocation. The runtime
+requires GMP without nail bits and limbs matching the target pointer width.
+Generated code and the runtime must use matching target ABIs.
 
-The pointer is an opaque handle, which may eventually encode an immediate
-integer. It must not be assumed dereferenceable or heap-aligned without a tag
-check. Future tagged arithmetic will use integers matching the pointer's bit
-width, independently of the configurable lowering width of `index`.
+Nonatomic reference counts use ordinary loads/stores. Atomic retains use relaxed
+ordering, releases use release ordering, and final destruction performs an
+acquire fence. Reference-count overflow aborts. Atomic counting does not permit
+retaining a borrowed value after its last owning reference has been released.
+
+## Custom allocation
+
+Every runtime allocation and deallocation uses this C ABI, declared in
+`RCGMP/Runtime/Allocation.h`:
+
+```c
+void *rcgmp_allocate(size_t size, size_t alignment);
+void rcgmp_dealloc(void *pointer, size_t size, size_t alignment);
+```
+
+The default implementation uses `malloc` and `free`. To supply an allocator,
+build with `-DRCGMP_RUNTIME_DEFAULT_ALLOCATOR=OFF` and link definitions of both
+functions. Deallocation receives the original allocation size and alignment.
+Allocation must return suitably aligned storage or null; the runtime aborts on
+allocation failure. Hooks must support concurrent calls when atomic integers
+are used across threads. No allocator pointer is stored in each integer.
+
+`RCGMP::Runtime` links GMP through `GMP::GMP`; the dialect library does not
+link GMP. The hooks manage rcgmp objects only and do not change GMP's global
+allocation functions.
 
 ## License
 

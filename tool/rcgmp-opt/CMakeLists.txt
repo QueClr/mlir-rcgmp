@@ -2,6 +2,11 @@ add_llvm_executable(rcgmp-opt main.cpp)
 target_link_libraries(rcgmp-opt PRIVATE
   MLIRRCGMP
   MLIRRCGMPToLLVM
+  MLIRRCGMPToSCF
+  MLIRArithToLLVM
+  MLIRSCFToControlFlow
+  MLIRReconcileUnrealizedCasts
+  MLIRTransforms
   MLIRControlFlowDialect
   MLIRControlFlowToLLVM
   MLIRConvertToLLVMPass

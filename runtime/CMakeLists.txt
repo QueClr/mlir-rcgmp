@@ -1,5 +1,9 @@
-# Dependency target for the C/C++ runtime. Implementation sources will be
-# added with the first arithmetic operations.
-add_library(RCGMPRuntime INTERFACE)
+option(RCGMP_RUNTIME_DEFAULT_ALLOCATOR "Provide malloc/free allocation hooks" ON)
+add_library(RCGMPRuntime STATIC Mpz.c)
+if(RCGMP_RUNTIME_DEFAULT_ALLOCATOR)
+  target_sources(RCGMPRuntime PRIVATE Allocation.c)
+endif()
 add_library(RCGMP::Runtime ALIAS RCGMPRuntime)
-target_link_libraries(RCGMPRuntime INTERFACE GMP::GMP)
+target_link_libraries(RCGMPRuntime PUBLIC GMP::GMP)
+set_target_properties(RCGMPRuntime PROPERTIES POSITION_INDEPENDENT_CODE ON)
+install(TARGETS RCGMPRuntime ARCHIVE DESTINATION lib)

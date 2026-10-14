@@ -1,10 +1,11 @@
 #include "RCGMP/Conversion/ConvertRCGMPToLLVM.h"
+#include "RCGMP/Conversion/ConvertRCGMPBridgeToLLVM.h"
 #include "RCGMP/IR/RCGMPDialect.h"
 #include "RCGMP/IR/RCGMPTypes.h"
 
 #include <mlir/Conversion/ConvertToLLVM/ToLLVMInterface.h>
 #include <mlir/Conversion/LLVMCommon/TypeConverter.h>
-#include <mlir/Dialect/LLVMIR/LLVMTypes.h>
+#include <mlir/Dialect/LLVMIR/LLVMDialect.h>
 #include <mlir/IR/DialectRegistry.h>
 #include <mlir/Transforms/DialectConversion.h>
 
@@ -26,6 +27,7 @@ struct RCGMPConvertToLLVMInterface : ConvertToLLVMPatternInterface {
       ConversionTarget &target, LLVMTypeConverter &converter,
       RewritePatternSet &patterns) const override {
     populateRCGMPToLLVMTypeConversions(converter);
+    populateRCGMPBridgeToLLVMConversionPatterns(converter, patterns);
     target.addIllegalDialect<RCGMPDialect>();
   }
 };
