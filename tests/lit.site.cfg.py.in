@@ -1,0 +1,4 @@
+config.rcgmp_opt = r"@CMAKE_RUNTIME_OUTPUT_DIRECTORY@/rcgmp-opt@CMAKE_EXECUTABLE_SUFFIX@"
+config.filecheck = r"@RCGMP_FILECHECK@"
+config.test_exec_root = r"@CMAKE_CURRENT_BINARY_DIR@"
+lit_config.load_config(config, r"@CMAKE_CURRENT_SOURCE_DIR@/lit.cfg.py")

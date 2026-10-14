@@ -1,0 +1,18 @@
+#ifndef RCGMP_IR_DIALECT_TD
+#define RCGMP_IR_DIALECT_TD
+
+include "mlir/IR/OpBase.td"
+
+def RCGMPDialect : Dialect {
+  let name = "rcgmp";
+  let cppNamespace = "::mlir::rcgmp";
+  let summary = "Reference-counted arbitrary-precision arithmetic";
+  let description = [{
+    The rcgmp dialect represents reference-counted arbitrary-precision values
+    backed by GMP. Integer types distinguish atomic and nonatomic reference
+    counting. Arithmetic and ownership operations are not yet implemented.
+  }];
+  let useDefaultTypePrinterParser = 1;
+}
+
+#endif

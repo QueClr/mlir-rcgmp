@@ -1,0 +1,10 @@
+find_package(LLVM REQUIRED CONFIG)
+if(NOT LLVM_VERSION_MAJOR EQUAL 23)
+  message(FATAL_ERROR "LLVM 23.x is required; found ${LLVM_PACKAGE_VERSION}")
+endif()
+message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION} in ${LLVM_DIR}")
+
+list(APPEND CMAKE_MODULE_PATH "${LLVM_CMAKE_DIR}")
+include(AddLLVM)
+include(TableGen)
+include(HandleLLVMOptions)
