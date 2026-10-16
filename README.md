@@ -63,7 +63,9 @@ cmake --build build --target check-rcgmp
 `nix build` builds, tests, and installs the dialect library, headers, and
 `rcgmp-opt`. `nix flake check` runs the package check for the current system
 and checks that C/C++ sources pass `clang-format` and `flake.nix` passes
-`nixfmt`; `nix fmt flake.nix` formats the flake.
+`nixfmt`; `nix fmt flake.nix` formats the flake. On Linux, it also runs the
+test suite in a Debug build with AddressSanitizer, LeakSanitizer, and UBSan;
+run only that check with `nix build .#checks.x86_64-linux.asan-ubsan -L`.
 
 Outside Nix, install LLVM/MLIR 23 development packages, GMP 6.2 or newer,
 CMake 3.28 or newer, Ninja, Python with `lit`, and LLVM's `FileCheck`. Set

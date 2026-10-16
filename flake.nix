@@ -90,6 +90,8 @@
         let
           env = environment system;
           inherit (nixpkgs) lib;
+          sanitizers = "-fsanitize=address,undefined";
+          sanitizerFlags = "${sanitizers} -fno-sanitize-recover=all -fno-omit-frame-pointer";
         in
         {
           build = self.packages.${system}.default;
@@ -123,6 +125,26 @@
                 nixfmt --check flake.nix
                 touch "$out"
               '';
+        }
+        # LLVM/MLIR stay uninstrumented, which ASan and UBSan tolerate.
+        // lib.optionalAttrs (lib.hasSuffix "-linux" system) {
+          asan-ubsan = self.packages.${system}.default.overrideAttrs {
+            pname = "mlir-rcgmp-asan-ubsan";
+            cmakeBuildType = "Debug";
+            # CMake initializes its compiler and linker flags from these.
+            CFLAGS = sanitizerFlags;
+            CXXFLAGS = sanitizerFlags;
+            LDFLAGS = sanitizers;
+            # fortify conflicts with ASan; strictoverflow hides signed overflow.
+            hardeningDisable = [
+              "fortify"
+              "strictoverflow"
+            ];
+            ASAN_OPTIONS = "detect_leaks=1";
+            UBSAN_OPTIONS = "print_stacktrace=1";
+            installPhase = "touch $out";
+            dontFixup = true;
+          };
         }
       );
       formatter = forAllSystems (system: nixpkgs.legacyPackages.${system}.nixfmt);
