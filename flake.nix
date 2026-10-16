@@ -85,9 +85,46 @@
         }
       );
 
-      checks = forAllSystems (system: {
-        build = self.packages.${system}.default;
-      });
+      checks = forAllSystems (
+        system:
+        let
+          env = environment system;
+          inherit (nixpkgs) lib;
+        in
+        {
+          build = self.packages.${system}.default;
+          format =
+            env.pkgs.runCommand "mlir-rcgmp-format"
+              {
+                nativeBuildInputs = [
+                  env.llvm.clang-tools
+                  env.pkgs.nixfmt
+                ];
+                src = lib.fileset.toSource {
+                  root = ./.;
+                  fileset = lib.fileset.unions [
+                    ./.clang-format
+                    ./flake.nix
+                    (lib.fileset.fileFilter (
+                      file:
+                      lib.any file.hasExt [
+                        "c"
+                        "h"
+                        "cpp"
+                      ]
+                    ) ./.)
+                  ];
+                };
+              }
+              ''
+                cd "$src"
+                find . -type f \( -name '*.c' -o -name '*.h' -o -name '*.cpp' \) -print0 \
+                  | xargs -0 clang-format --dry-run --Werror
+                nixfmt --check flake.nix
+                touch "$out"
+              '';
+        }
+      );
       formatter = forAllSystems (system: nixpkgs.legacyPackages.${system}.nixfmt);
     };
 }

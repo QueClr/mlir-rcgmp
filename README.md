@@ -61,7 +61,9 @@ cmake --build build --target check-rcgmp
 ```
 
 `nix build` builds, tests, and installs the dialect library, headers, and
-`rcgmp-opt`. `nix flake check` runs the package check for the current system.
+`rcgmp-opt`. `nix flake check` runs the package check for the current system
+and checks that C/C++ sources pass `clang-format` and `flake.nix` passes
+`nixfmt`; `nix fmt flake.nix` formats the flake.
 
 Outside Nix, install LLVM/MLIR 23 development packages, GMP 6.2 or newer,
 CMake 3.28 or newer, Ninja, Python with `lit`, and LLVM's `FileCheck`. Set
