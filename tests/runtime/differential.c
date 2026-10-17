@@ -509,6 +509,70 @@ static void check_from_int_stream(FromIntOperation *operation,
   }
 }
 
+// Each chain feeds every result into the next operation as its uniquely owned
+// lhs, so operands also carry the growth headroom and the stale limbs above the
+// magnitude that the runtime leaves behind, and come from earlier reuse.
+static void check_chains(uint32_t atomic, gmp_randstate_t random) {
+  size_t operationCount = sizeof(binaryOperations) / sizeof(*binaryOperations);
+  mpz_t accumulator, operand, expected;
+  mpz_inits(accumulator, operand, expected, NULL);
+  seed_stream(random, "chain", atomic);
+  phase = "chain";
+  positionCount = iterations / 8;
+  for (unsigned long chain = 0; chain < positionCount; ++chain) {
+    position = chain + 1;
+    random_operand(accumulator, random);
+    void *result =
+        make_operand((Operand){accumulator, random_spare(random)}, atomic);
+    unsigned steps = 8 + gmp_urandomm_ui(random, 9);
+    for (unsigned step = 1; step <= steps; ++step) {
+      BinaryOperation *operation;
+      // Keep repeated products from growing without bound.
+      do
+        operation = &binaryOperations[gmp_urandomm_ui(random, operationCount)];
+      while (operation->oracle == mpz_mul &&
+             mpz_sizeinbase(accumulator, 2) > 1000);
+      switch (gmp_urandomm_ui(random, 3)) {
+      case 0:
+        random_operand(operand, random);
+        break;
+      case 1:
+        related_operand(operand, accumulator, random);
+        break;
+      default:
+        mpz_set_si(operand, random_delta(random, 4));
+        break;
+      }
+      void *rhs =
+          make_operand((Operand){operand, random_spare(random)}, atomic);
+      operation->oracle(expected, accumulator, operand);
+      result = operation->apply[atomic](result, rhs);
+      if (!represents(result, expected)) {
+        fprintf(stderr,
+                "%s (%s, chained): result differs from GMP or is not "
+                "canonical\n",
+                operation->name, atomic ? "atomic" : "local");
+        gmp_fprintf(stderr, "  lhs = %#Zx\n  rhs = %#Zx\n", accumulator,
+                    operand);
+        fprintf(stderr, "  step %u of %u\n", step, steps);
+        print_position();
+        abort();
+      }
+      mpz_swap(accumulator, expected);
+    }
+    release[atomic](result);
+    if (allocations != deallocations) {
+      fprintf(stderr,
+              "chained operations (%s): allocations and deallocations do not "
+              "balance\n",
+              atomic ? "atomic" : "local");
+      print_position();
+      abort();
+    }
+  }
+  mpz_clears(accumulator, operand, expected, NULL);
+}
+
 // Appends 2^exponent + delta and its negation.
 static void add_boundary_pair(mpz_t *boundaries, size_t *count,
                               unsigned exponent, long delta) {
@@ -601,6 +665,8 @@ int main(int argc, char **argv) {
     }
   }
 
+  for (uint32_t atomic = 0; atomic < 2; ++atomic)
+    check_chains(atomic, random);
   for (size_t index = 0;
        index < sizeof(fromIntOperations) / sizeof(*fromIntOperations); ++index)
     check_from_int_stream(&fromIntOperations[index], random, lhs);
