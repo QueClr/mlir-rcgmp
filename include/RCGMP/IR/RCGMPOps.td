@@ -4,9 +4,12 @@
 // Public operations with explicit ownership semantics.
 include "RCGMP/IR/RCGMPOpBase.td"
 
-def RCGMP_FromIntOp : RCGMPOp<"from_int"> {
+// A consumed reference may be decremented, reused, or freed.
+defvar RCGMP_ConsumedEffects = [MemRead, MemWrite, MemFree];
+
+def RCGMP_FromIntOp : RCGMPOp<"from_int", [RCGMP_NotSpeculatable]> {
   let arguments = (ins AnySignlessInteger:$value, UnitAttr:$isUnsigned);
-  let results = (outs RCGMP_MpzType:$result);
+  let results = (outs Res<RCGMP_MpzType, "new integer", [MemAlloc]>:$result);
   let assemblyFormat = "$value (`unsigned` $isUnsigned^)? attr-dict `:` type($value) `to` type($result)";
 
   let summary = "Create one owned integer from a fixed-width integer";
@@ -16,20 +19,25 @@ def RCGMP_FromIntOp : RCGMPOp<"from_int"> {
   }];
 }
 
-def RCGMP_RetainOp : RCGMPOp<"retain", [SameOperandsAndResultType]> {
-  let summary = "Borrow an integer and produce an additional owned reference";
-  let arguments = (ins RCGMP_MpzType:$value);
-  let results = (outs RCGMP_MpzType:$result);
+def RCGMP_RetainOp : RCGMPOp<"retain", [RCGMP_NotSpeculatable]> {
+  let summary = "Add one owned reference to an integer";
+  let description = [{
+    The operand must own at least one reference and owns one more afterwards.
+  }];
+  let arguments = (ins Arg<RCGMP_MpzType, "retained integer",
+                           [MemRead, MemWrite]>:$value);
   let assemblyFormat = "$value attr-dict `:` type($value)";
 }
 
-def RCGMP_ReleaseOp : RCGMPOp<"release"> {
+def RCGMP_ReleaseOp : RCGMPOp<"release", [RCGMP_NotSpeculatable]> {
   let summary = "Consume one owned reference";
-  let arguments = (ins RCGMP_MpzType:$value);
+  let arguments = (ins Arg<RCGMP_MpzType, "released integer",
+                           RCGMP_ConsumedEffects>:$value);
   let assemblyFormat = "$value attr-dict `:` type($value)";
 }
 
-def RCGMP_AddIOp : RCGMPOp<"addi", [SameOperandsAndResultType, Commutative]> {
+def RCGMP_AddIOp : RCGMPOp<"addi", [SameOperandsAndResultType, Commutative,
+    RCGMP_NotSpeculatable]> {
   let summary = "Consume two integer references and produce their sum";
   let description = [{
     Each operand position consumes one owned reference. Adding a heap value to
@@ -37,15 +45,20 @@ def RCGMP_AddIOp : RCGMPOp<"addi", [SameOperandsAndResultType, Commutative]> {
     The result owns one reference. A uniquely owned operand may be mutated and
     reused; shared operands retain their values. Integer addition is exact.
   }];
-  let arguments = (ins RCGMP_MpzType:$lhs, RCGMP_MpzType:$rhs);
-  let results = (outs RCGMP_MpzType:$result);
+  let arguments = (ins
+      Arg<RCGMP_MpzType, "consumed lhs", RCGMP_ConsumedEffects>:$lhs,
+      Arg<RCGMP_MpzType, "consumed rhs", RCGMP_ConsumedEffects>:$rhs);
+  let results = (outs Res<RCGMP_MpzType, "new integer", [MemAlloc]>:$result);
   let assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($result)";
 }
 
 class RCGMP_BinaryOp<string name, string semantics, list<Trait> traits = []>
-    : RCGMPOp<name, !listconcat([SameOperandsAndResultType], traits)> {
-  let arguments = (ins RCGMP_MpzType:$lhs, RCGMP_MpzType:$rhs);
-  let results = (outs RCGMP_MpzType:$result);
+    : RCGMPOp<name, !listconcat([SameOperandsAndResultType,
+                                 RCGMP_NotSpeculatable], traits)> {
+  let arguments = (ins
+      Arg<RCGMP_MpzType, "consumed lhs", RCGMP_ConsumedEffects>:$lhs,
+      Arg<RCGMP_MpzType, "consumed rhs", RCGMP_ConsumedEffects>:$rhs);
+  let results = (outs Res<RCGMP_MpzType, "new integer", [MemAlloc]>:$result);
   let assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($result)";
   let description = [{
     Each operand position consumes one owned reference; aliased heap operands

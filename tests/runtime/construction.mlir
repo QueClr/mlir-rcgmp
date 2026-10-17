@@ -36,14 +36,14 @@ func.func @from_atomic(%x: i64) -> !rcgmp.mpz<atomic> {
 // LLVM: llvm.add
 // LLVM: llvm.store
 func.func @retain_local(%x: !rcgmp.mpz) -> !rcgmp.mpz {
-  %r = rcgmp.retain %x : !rcgmp.mpz
-  return %r : !rcgmp.mpz
+  rcgmp.retain %x : !rcgmp.mpz
+  return %x : !rcgmp.mpz
 }
 // LLVM-LABEL: llvm.func @retain_atomic
 // LLVM: llvm.atomicrmw add {{.*}} monotonic
 func.func @retain_atomic(%x: !rcgmp.mpz<atomic>) -> !rcgmp.mpz<atomic> {
-  %r = rcgmp.retain %x : !rcgmp.mpz<atomic>
-  return %r : !rcgmp.mpz<atomic>
+  rcgmp.retain %x : !rcgmp.mpz<atomic>
+  return %x : !rcgmp.mpz<atomic>
 }
 // SCF-LABEL: func.func @release_local
 // SCF: rcgmp.bridge.mpz.is_immediate

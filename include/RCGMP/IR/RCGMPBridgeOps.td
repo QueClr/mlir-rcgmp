@@ -80,40 +80,43 @@ def RCGMP_MpzFromImmediateOp : RCGMPBridgeOp<"mpz.from_imm", [Pure]> {
   let summary = "Encode an integer proven to fit the immediate range";
 }
 
-def RCGMP_MpzPromoteOp : RCGMPBridgeOp<"mpz.promote"> {
+def RCGMP_MpzPromoteOp : RCGMPBridgeOp<"mpz.promote", [RCGMP_NotSpeculatable]> {
   let arguments = (ins AnySignlessInteger:$value, UnitAttr:$isUnsigned);
-  let results = (outs RCGMP_MpzType:$result);
+  let results =
+      (outs Res<RCGMP_MpzType, "new heap integer", [MemAlloc]>:$result);
   let assemblyFormat = "$value (`unsigned` $isUnsigned^)? attr-dict `:` type($value) `to` type($result)";
 
   let summary = "Allocate an integer that does not fit the immediate range";
 }
 
-def RCGMP_MpzIncRefOp : RCGMPBridgeOp<"mpz.inc_ref"> {
+def RCGMP_MpzIncRefOp : RCGMPBridgeOp<"mpz.inc_ref", [RCGMP_NotSpeculatable]> {
   let summary = "Increment a heap reference count and report overflow";
   let description = [{
     The operand must be a live heap value. The result is true if the reference
     count overflowed; the caller must terminate execution in that case.
   }];
-  let arguments = (ins RCGMP_MpzType:$value);
+  let arguments = (ins Arg<RCGMP_MpzType, "heap integer",
+                           [MemRead, MemWrite]>:$value);
   let results = (outs I1:$overflow);
   let assemblyFormat = "$value attr-dict `:` type($value)";
 }
 
-def RCGMP_MpzDecRefOp : RCGMPBridgeOp<"mpz.dec_ref"> {
+def RCGMP_MpzDecRefOp : RCGMPBridgeOp<"mpz.dec_ref", [RCGMP_NotSpeculatable]> {
   let summary = "Consume a heap reference and report whether it was the last";
   let description = [{
     The operand must be a live heap value with one owned reference available.
     A true result must be followed by `bridge.mpz.free`. Atomic decrements use
     release ordering; the matching acquire fence is performed by free.
   }];
-  let arguments = (ins RCGMP_MpzType:$value);
+  let arguments = (ins Arg<RCGMP_MpzType, "heap integer",
+                           [MemRead, MemWrite]>:$value);
   let results = (outs I1:$last);
   let assemblyFormat = "$value attr-dict `:` type($value)";
 }
 
-def RCGMP_MpzFreeOp : RCGMPBridgeOp<"mpz.free"> {
+def RCGMP_MpzFreeOp : RCGMPBridgeOp<"mpz.free", [RCGMP_NotSpeculatable]> {
   let summary = "Free a heap integer after its final reference was released";
-  let arguments = (ins RCGMP_MpzType:$value);
+  let arguments = (ins Arg<RCGMP_MpzType, "heap integer", [MemFree]>:$value);
   let assemblyFormat = "$value attr-dict `:` type($value)";
 }
 
@@ -144,7 +147,7 @@ def RCGMP_MpzFromBitsOp : RCGMPBridgeOp<"mpz.from_bits", [Pure]> {
   let hasVerifier = 1;
 }
 
-def RCGMP_MpzIsUniqueOp : RCGMPBridgeOp<"mpz.is_unique"> {
+def RCGMP_MpzIsUniqueOp : RCGMPBridgeOp<"mpz.is_unique", [RCGMP_NotSpeculatable]> {
   let summary = "Test whether a live heap value has exactly one reference";
   let description = [{
     The operand must be a heap handle with an owned reference held by the caller.
@@ -152,7 +155,7 @@ def RCGMP_MpzIsUniqueOp : RCGMPBridgeOp<"mpz.is_unique"> {
     while the reference remains exclusive; retaining or publishing an alias
     invalidates that permission. This operation is not speculatable or pure.
   }];
-  let arguments = (ins RCGMP_MpzType:$value);
+  let arguments = (ins Arg<RCGMP_MpzType, "heap integer", [MemRead]>:$value);
   let results = (outs I1:$result);
   let assemblyFormat = "$value attr-dict `:` type($value)";
 }

@@ -33,6 +33,7 @@ int main(int argc, char **argv) {
   mlir::registerPass([] { return mlir::createSCFToControlFlowPass(); });
   mlir::registerPass([] { return mlir::createReconcileUnrealizedCastsPass(); });
   mlir::registerPass([] { return mlir::createCanonicalizerPass(); });
+  mlir::registerPass([] { return mlir::createCSEPass(); });
   mlir::registerPass([] { return mlir::createConvertToLLVMPass(); });
   return mlir::failed(
       mlir::MlirOptMain(argc, argv, "rcgmp optimization driver\n", registry));

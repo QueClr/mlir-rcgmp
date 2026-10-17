@@ -30,9 +30,9 @@ Aliased heap operands require one owned reference per operand position.
 
 ```mlir
 %integer = rcgmp.from_int %input : i64 to !rcgmp.mpz
-%alias = rcgmp.retain %integer : !rcgmp.mpz
+rcgmp.retain %integer : !rcgmp.mpz
 rcgmp.release %integer : !rcgmp.mpz
-rcgmp.release %alias : !rcgmp.mpz
+rcgmp.release %integer : !rcgmp.mpz
 ```
 
 `from_int` accepts any signless integer width. It interprets the bits as signed
@@ -43,8 +43,8 @@ Ownership is a caller contract; the dialect does not yet verify linear use.
 For example, doubling consumes the original reference and its retained alias:
 
 ```mlir
-%alias = rcgmp.retain %integer : !rcgmp.mpz
-%twice = rcgmp.addi %integer, %alias : !rcgmp.mpz
+rcgmp.retain %integer : !rcgmp.mpz
+%twice = rcgmp.addi %integer, %integer : !rcgmp.mpz
 rcgmp.release %twice : !rcgmp.mpz
 ```
 

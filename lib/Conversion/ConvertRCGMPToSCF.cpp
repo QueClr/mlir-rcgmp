@@ -50,7 +50,7 @@ struct RetainLowering : OpRewritePattern<RetainOp> {
     auto valid = arith::XOrIOp::create(rewriter, loc, overflow, one);
     cf::AssertOp::create(rewriter, loc, valid,
                          "rcgmp reference count overflow");
-    rewriter.replaceOp(op, op.getValue());
+    rewriter.eraseOp(op);
     return success();
   }
 };

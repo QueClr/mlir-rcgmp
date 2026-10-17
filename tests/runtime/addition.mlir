@@ -50,12 +50,12 @@ func.func @add_atomic(%x: !rcgmp.mpz<atomic>, %y: !rcgmp.mpz<atomic>) -> !rcgmp.
   return %r : !rcgmp.mpz<atomic>
 }
 func.func @double_local(%x: !rcgmp.mpz) -> !rcgmp.mpz {
-  %alias = rcgmp.retain %x : !rcgmp.mpz
-  %r = rcgmp.addi %x, %alias : !rcgmp.mpz
+  rcgmp.retain %x : !rcgmp.mpz
+  %r = rcgmp.addi %x, %x : !rcgmp.mpz
   return %r : !rcgmp.mpz
 }
 func.func @double_atomic(%x: !rcgmp.mpz<atomic>) -> !rcgmp.mpz<atomic> {
-  %alias = rcgmp.retain %x : !rcgmp.mpz<atomic>
-  %r = rcgmp.addi %x, %alias : !rcgmp.mpz<atomic>
+  rcgmp.retain %x : !rcgmp.mpz<atomic>
+  %r = rcgmp.addi %x, %x : !rcgmp.mpz<atomic>
   return %r : !rcgmp.mpz<atomic>
 }

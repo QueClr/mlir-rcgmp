@@ -14,8 +14,8 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<!llvm.ptr, dense<
   // CHECK: llvm.ptrtoint {{.*}} : !llvm.ptr to i32
   // CHECK: llvm.atomicrmw add {{.*}} monotonic : !llvm.ptr, i32
   func.func @retain(%x: !rcgmp.mpz<atomic>) -> !rcgmp.mpz<atomic> {
-    %r = rcgmp.retain %x : !rcgmp.mpz<atomic>
-    return %r : !rcgmp.mpz<atomic>
+    rcgmp.retain %x : !rcgmp.mpz<atomic>
+    return %x : !rcgmp.mpz<atomic>
   }
   // CHECK-LABEL: llvm.func @add
   // CHECK: "llvm.intr.sadd.with.overflow"{{.*}} : (i32, i32) -> !llvm.struct<(i32, i1)>
