@@ -6,14 +6,6 @@ void *add_atomic(void *, void *);
 void *double_local(void *);
 void *double_atomic(void *);
 
-static void *from_mpz(mpz_t value, uint32_t atomic) {
-  uintptr_t words[32];
-  CHECK(mpz_sizeinbase(value, 2) <= sizeof(words) * CHAR_BIT);
-  size_t count;
-  mpz_export(words, &count, -1, sizeof(*words), 0, 0, value);
-  return rcgmp_mpz_from_words(words, count, mpz_sgn(value) < 0, atomic);
-}
-
 static void *add(void *lhs, void *rhs, uint32_t atomic) {
   return atomic ? add_atomic(lhs, rhs) : add_local(lhs, rhs);
 }

@@ -56,5 +56,14 @@ endif()
 rcgmp_native_test(addition)
 rcgmp_native_test(binary)
 rcgmp_native_test(signed-overflow)
+rcgmp_native_test(differential)
+add_test(NAME rcgmp-differential-seed
+  COMMAND rcgmp-differential 3141592653 64)
+# An invalid argument must print only the usage line and exit with status 2.
+add_test(NAME rcgmp-differential-usage
+  COMMAND sh -c [=[output=$("$0" abc 2>&1); status=$?; printf '%s\n' "$output"
+    test $status -eq 2 &&
+    test "$output" = "usage: rcgmp-differential [seed [iterations]]"]=]
+    $<TARGET_FILE:rcgmp-differential>)
 find_package(Threads REQUIRED)
 target_link_libraries(rcgmp-addition PRIVATE Threads::Threads)

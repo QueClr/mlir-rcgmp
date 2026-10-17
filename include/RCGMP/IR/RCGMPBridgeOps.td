@@ -138,8 +138,9 @@ def RCGMP_MpzFromBitsOp : RCGMPBridgeOp<"mpz.from_bits", [Pure]> {
   let description = [{
     No tagging, range checks, allocation, or reference-count changes occur.
     The input width must equal the handle width from the data layout. The caller
-    must establish a valid tagged immediate or live heap pointer before using
-    the result. Reconstructing a heap handle does not create an owned reference.
+    must establish a canonical handle, as defined by the `!rcgmp.mpz` type,
+    before using the result; a heap handle must also point to a live
+    allocation. Reconstructing a heap handle does not create an owned reference.
   }];
   let arguments = (ins AnySignlessInteger:$value);
   let results = (outs RCGMP_MpzType:$result);

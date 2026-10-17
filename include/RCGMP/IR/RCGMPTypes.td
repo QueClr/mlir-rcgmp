@@ -19,6 +19,12 @@ def RCGMP_MpzType : TypeDef<RCGMPDialect, "Mpz", [
     size and alignment follow that pointer's data layout. The handle may encode
     an immediate integer; its pointer representation does not imply that it is
     dereferenceable.
+
+    With `W` the handle width from the data layout, the immediate range is
+    `[-2^(W-3), 2^(W-3) - 1]`. Every value is canonical: an integer `n` in the
+    immediate range is always the immediate whose `W`-bit two's-complement bits
+    are `4*n + 1`, and a heap integer holds a value outside that range without
+    leading zero limbs.
   }];
   let parameters = (ins DefaultValuedParameter<"bool", "false">:$atomic);
   let hasCustomAssemblyFormat = 1;

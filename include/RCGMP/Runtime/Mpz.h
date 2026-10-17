@@ -8,6 +8,10 @@
 extern "C" {
 #endif
 
+// Every handle passed to or returned by these functions is canonical, as
+// defined by the !rcgmp.mpz type: an immediate exactly when its value fits the
+// immediate range, and otherwise a heap integer without leading zero limbs.
+
 // Magnitude words are least-significant first. Zero words are permitted.
 // negative and atomic must be 0 or 1. The result owns one reference.
 void *rcgmp_mpz_from_words(const uintptr_t *words, size_t count,

@@ -69,6 +69,10 @@ int main(void) {
   release_local(x);
   CHECK(rcgmp_decode(from_signed_i1()) == -1);
   CHECK(rcgmp_decode(from_unsigned_i1()) == 1);
+  // Zero is the immediate 0 regardless of the sign flag or zero words.
+  uintptr_t zeros[] = {0, 0};
+  CHECK((uintptr_t)rcgmp_mpz_from_words(zeros, 0, 1, 0) == 1);
+  CHECK((uintptr_t)rcgmp_mpz_from_words(zeros, 2, 1, 1) == 1);
 #ifdef RCGMP_TEST_ALLOCATOR
   CHECK(allocations > 0 && allocations == deallocations);
   size_t before = allocations;
