@@ -41,7 +41,12 @@ void rcgmp_dealloc(void *pointer, size_t bytes, size_t alignment) {
 }
 #endif
 
-static void check_value(void *value, mpz_t expected) {
+// Whether value is the canonical representation of expected: the immediate
+// 4*n + 1 exactly when expected is an n in the immediate range, and otherwise a
+// heap integer without leading zero limbs.
+static inline int represents(void *value, mpz_srcptr expected) {
+  if (rcgmp_is_immediate(value) && ((uintptr_t)value & 3) != 1)
+    return 0;
   mpz_t actual;
   mpz_init(actual);
   if (rcgmp_is_immediate(value)) {
@@ -53,13 +58,31 @@ static void check_value(void *value, mpz_t expected) {
       mpz_neg(actual, actual);
   } else {
     RCGMPMpz *heap = value;
-    size_t count = heap->size < 0 ? -heap->size : heap->size;
-    CHECK(count && count <= heap->capacity && heap->limbs[count - 1]);
+    int negative = heap->size < 0;
+    size_t count = negative ? -heap->size : heap->size;
+    if (!count || count > heap->capacity || !heap->limbs[count - 1] ||
+        (count == 1 && heap->limbs[0] <= (uintptr_t)RCGMP_IMM_MAX + negative)) {
+      mpz_clear(actual);
+      return 0;
+    }
     mpz_import(actual, count, -1, sizeof(mp_limb_t), 0, 0, heap->limbs);
-    if (heap->size < 0)
+    if (negative)
       mpz_neg(actual, actual);
   }
-  CHECK(mpz_cmp(actual, expected) == 0);
+  int equal = mpz_cmp(actual, expected) == 0;
   mpz_clear(actual);
+  return equal;
+}
+
+static inline void check_value(void *value, mpz_srcptr expected) {
+  CHECK(represents(value, expected));
+}
+
+static inline void *from_mpz(mpz_srcptr value, uint32_t atomic) {
+  uintptr_t words[32];
+  CHECK(mpz_sizeinbase(value, 2) <= sizeof(words) * CHAR_BIT);
+  size_t count;
+  mpz_export(words, &count, -1, sizeof(*words), 0, 0, value);
+  return rcgmp_mpz_from_words(words, count, mpz_sgn(value) < 0, atomic);
 }
 #endif

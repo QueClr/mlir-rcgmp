@@ -21,14 +21,6 @@ static Binary operations[] = {
     {{xor_local, xor_atomic}, mpz_xor},
 };
 
-static void *from_mpz(mpz_t value, uint32_t atomic) {
-  uintptr_t words[32];
-  CHECK(mpz_sizeinbase(value, 2) <= sizeof(words) * CHAR_BIT);
-  size_t count;
-  mpz_export(words, &count, -1, sizeof(*words), 0, 0, value);
-  return rcgmp_mpz_from_words(words, count, mpz_sgn(value) < 0, atomic);
-}
-
 static void check_pair(Binary *op, mpz_t lhs, mpz_t rhs, uint32_t atomic,
                        unsigned shared) {
   void *x = from_mpz(lhs, atomic), *y = from_mpz(rhs, atomic);
