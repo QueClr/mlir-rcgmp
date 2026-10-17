@@ -1,9 +1,11 @@
 #ifndef RCGMP_TEST_RUNTIME_H
 #define RCGMP_TEST_RUNTIME_H
 
+// gmp.h declares its stdio functions, such as gmp_fprintf, only after stdio.h.
+#include <stdio.h>
+
 #include "MpzInternal.h"
 #include "RCGMP/Runtime/Allocation.h"
-#include <stdio.h>
 #include <stdlib.h>
 
 #define CHECK(condition)                                                       \
