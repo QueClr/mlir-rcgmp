@@ -3,6 +3,7 @@
 #include "Test.h"
 #include <ctype.h>
 #include <errno.h>
+#include <inttypes.h>
 #include <string.h>
 
 void *addi_local(void *, void *);
@@ -19,6 +20,24 @@ void *retain_local(void *);
 void *retain_atomic(void *);
 void release_local(void *);
 void release_atomic(void *);
+void *from_signed_i61_local(uint64_t);
+void *from_unsigned_i61_local(uint64_t);
+void *from_signed_i62_local(uint64_t);
+void *from_unsigned_i62_local(uint64_t);
+void *from_signed_i63_local(uint64_t);
+void *from_unsigned_i63_local(uint64_t);
+void *from_signed_i64_local(uint64_t);
+void *from_unsigned_i64_local(uint64_t);
+void *from_signed_i65_local(uint64_t, uint64_t);
+void *from_unsigned_i65_local(uint64_t, uint64_t);
+void *from_signed_i128_local(uint64_t, uint64_t);
+void *from_unsigned_i128_local(uint64_t, uint64_t);
+void *from_signed_i129_local(uint64_t, uint64_t, uint64_t);
+void *from_unsigned_i129_local(uint64_t, uint64_t, uint64_t);
+void *from_signed_i64_atomic(uint64_t);
+void *from_unsigned_i64_atomic(uint64_t);
+void *from_signed_i129_atomic(uint64_t, uint64_t, uint64_t);
+void *from_unsigned_i129_atomic(uint64_t, uint64_t, uint64_t);
 
 // Compiled reference counting, indexed by atomicity. Operands are built by the
 // C runtime, so both implementations operate on the same objects.
@@ -55,6 +74,43 @@ static BinaryOperation binaryOperations[] = {
      {xori_local, xori_atomic},
      {rcgmp_mpz_xor, rcgmp_mpz_xor_atomic},
      mpz_xor},
+};
+
+// Each from_int entry point converts an operand of the given width, passed as
+// ceil(width / 64) 64-bit words, least significant first.
+typedef struct {
+  const char *name;
+  unsigned width;
+  int isUnsigned;
+  uint32_t atomic;
+  union {
+    void *(*one)(uint64_t);
+    void *(*two)(uint64_t, uint64_t);
+    void *(*three)(uint64_t, uint64_t, uint64_t);
+  } apply;
+} FromIntOperation;
+
+// The widths cover each way of deciding whether a value is immediate, and
+// operands of one, two, and three words.
+static FromIntOperation fromIntOperations[] = {
+    {"from_signed_i61", 61, 0, 0, {.one = from_signed_i61_local}},
+    {"from_unsigned_i61", 61, 1, 0, {.one = from_unsigned_i61_local}},
+    {"from_signed_i62", 62, 0, 0, {.one = from_signed_i62_local}},
+    {"from_unsigned_i62", 62, 1, 0, {.one = from_unsigned_i62_local}},
+    {"from_signed_i63", 63, 0, 0, {.one = from_signed_i63_local}},
+    {"from_unsigned_i63", 63, 1, 0, {.one = from_unsigned_i63_local}},
+    {"from_signed_i64", 64, 0, 0, {.one = from_signed_i64_local}},
+    {"from_unsigned_i64", 64, 1, 0, {.one = from_unsigned_i64_local}},
+    {"from_signed_i65", 65, 0, 0, {.two = from_signed_i65_local}},
+    {"from_unsigned_i65", 65, 1, 0, {.two = from_unsigned_i65_local}},
+    {"from_signed_i128", 128, 0, 0, {.two = from_signed_i128_local}},
+    {"from_unsigned_i128", 128, 1, 0, {.two = from_unsigned_i128_local}},
+    {"from_signed_i129", 129, 0, 0, {.three = from_signed_i129_local}},
+    {"from_unsigned_i129", 129, 1, 0, {.three = from_unsigned_i129_local}},
+    {"from_signed_i64", 64, 0, 1, {.one = from_signed_i64_atomic}},
+    {"from_unsigned_i64", 64, 1, 1, {.one = from_unsigned_i64_atomic}},
+    {"from_signed_i129", 129, 0, 1, {.three = from_signed_i129_atomic}},
+    {"from_unsigned_i129", 129, 1, 1, {.three = from_unsigned_i129_atomic}},
 };
 
 // A shared operand has an extra reference held by the caller, which must
@@ -332,17 +388,125 @@ static size_t random_spare(gmp_randstate_t random) {
 // Each operation and atomicity draws from its own stream, keyed by the seed and
 // the operation name, so that a larger iteration count extends every stream
 // and adding an operation leaves the others unchanged.
-static void seed_stream(gmp_randstate_t random, BinaryOperation *operation,
+static void seed_stream(gmp_randstate_t random, const char *name,
                         uint32_t atomic) {
   mpz_t key;
   mpz_init(key);
-  mpz_import(key, strlen(operation->name), 1, 1, 0, 0, operation->name);
+  mpz_import(key, strlen(name), 1, 1, 0, 0, name);
   mpz_mul_2exp(key, key, 1);
   mpz_add_ui(key, key, atomic);
   mpz_mul_2exp(key, key, sizeof(seed) * CHAR_BIT);
   mpz_add_ui(key, key, seed);
   gmp_randseed(random, key);
   mpz_clear(key);
+}
+
+static void *call_from_int(FromIntOperation *operation, const uint64_t *words) {
+  switch ((operation->width + 63) / 64) {
+  case 1:
+    return operation->apply.one(words[0]);
+  case 2:
+    return operation->apply.two(words[0], words[1]);
+  default:
+    return operation->apply.three(words[0], words[1], words[2]);
+  }
+}
+
+static void fail_from_int(FromIntOperation *operation, const uint64_t *words,
+                          mpz_srcptr expected, const char *problem) {
+  fprintf(stderr, "%s (%s): %s\n  words =", operation->name,
+          operation->atomic ? "atomic" : "local", problem);
+  for (unsigned i = 0; i < (operation->width + 63) / 64; ++i)
+    fprintf(stderr, " %#" PRIx64, words[i]);
+  gmp_fprintf(stderr, "\n  expected = %#Zx\n", expected);
+  print_position();
+  abort();
+}
+
+// Passes the low words of input, which the entry point truncates further to the
+// operand width.
+static void check_from_int(FromIntOperation *operation, mpz_srcptr input) {
+  unsigned width = operation->width, count = (width + 63) / 64;
+  uint64_t words[3] = {0};
+  mpz_t expected;
+  mpz_init(expected);
+  mpz_fdiv_r_2exp(expected, input, 64 * count);
+  mpz_export(words, NULL, -1, sizeof(*words), 0, 0, expected);
+  mpz_fdiv_r_2exp(expected, expected, width);
+  // A set sign bit makes the ceiling remainder the value minus 2^width.
+  if (!operation->isUnsigned && mpz_tstbit(expected, width - 1))
+    mpz_cdiv_r_2exp(expected, expected, width);
+  void *result = call_from_int(operation, words);
+  if (!represents(result, expected))
+    fail_from_int(operation, words, expected,
+                  "result differs from GMP or is not canonical");
+  release[operation->atomic](result);
+  if (allocations != deallocations)
+    fail_from_int(operation, words, expected,
+                  "allocations and deallocations do not balance");
+  mpz_clear(expected);
+}
+
+// Values near the immediate bounds, word boundaries, and the operand width,
+// with long runs of ones and zeros, and bits above the operand width.
+static void random_from_int_input(mpz_t value, gmp_randstate_t random,
+                                  unsigned width) {
+  unsigned word = GMP_NUMB_BITS;
+  unsigned edges[] = {word - 3, word - 2, word - 1, word, width - 1, width};
+  switch (gmp_urandomm_ui(random, 3)) {
+  case 0:
+    power_of_two(
+        value, edges[gmp_urandomm_ui(random, sizeof(edges) / sizeof(*edges))]);
+    add_small(value, random_delta(random, 4));
+    break;
+  case 1:
+    mpz_rrandomb(value, random, 1 + gmp_urandomm_ui(random, width + 64));
+    break;
+  default:
+    mpz_urandomb(value, random, gmp_urandomm_ui(random, width + 65));
+    break;
+  }
+  if (gmp_urandomb_ui(random, 1))
+    mpz_neg(value, value);
+}
+
+static void check_from_int_stream(FromIntOperation *operation,
+                                  gmp_randstate_t random, mpz_t input) {
+  unsigned word = GMP_NUMB_BITS, width = operation->width;
+  // Zero and one with either sign; both sides of the immediate bounds and of
+  // 2^(word-2), 2^(word-1), and 2^word; powers of two at two-word boundaries;
+  // and the operand width's signed minimum and maximum and unsigned maximum.
+  // Inputs wider than the operand are truncated.
+  struct {
+    unsigned exponent;
+    long delta;
+    int negate;
+  } grid[] = {
+      {0, -1, 0},           {0, 0, 0},          {0, 0, 1},
+      {word - 3, -1, 0},    {word - 3, 0, 0},   {word - 3, 0, 1},
+      {word - 3, 1, 1},     {word - 2, -1, 0},  {word - 2, 0, 0},
+      {word - 1, -1, 0},    {word - 1, 0, 0},   {word, -1, 0},
+      {word, 0, 0},         {word, 0, 1},       {2 * word - 1, 0, 0},
+      {2 * word - 1, 0, 1}, {2 * word, 0, 0},   {2 * word, 0, 1},
+      {width - 1, 0, 1},    {width - 1, -1, 0}, {width, -1, 0},
+  };
+  phase = "boundary sweep";
+  positionCount = 0;
+  for (size_t i = 0; i < sizeof(grid) / sizeof(*grid); ++i) {
+    power_of_two(input, grid[i].exponent);
+    add_small(input, grid[i].delta);
+    if (grid[i].negate)
+      mpz_neg(input, input);
+    check_from_int(operation, input);
+  }
+  seed_stream(random, operation->name, operation->atomic);
+  phase = "random iteration";
+  positionCount = iterations;
+  for (unsigned long i = 0; i < iterations; ++i) {
+    position = i + 1;
+    random_from_int_input(input, random, width);
+    check_from_int(operation, input);
+  }
 }
 
 // Appends 2^exponent + delta and its negation.
@@ -419,7 +583,7 @@ int main(int argc, char **argv) {
         for (size_t j = 0; j < boundaryCount; ++j)
           if (fits_immediate(boundaries[i]) && fits_immediate(boundaries[j]))
             check_runtime(operation, atomic, boundaries[i], boundaries[j]);
-      seed_stream(random, operation, atomic);
+      seed_stream(random, operation->name, atomic);
       phase = "random iteration";
       positionCount = iterations;
       for (unsigned long i = 0; i < iterations; ++i) {
@@ -436,6 +600,10 @@ int main(int argc, char **argv) {
       }
     }
   }
+
+  for (size_t index = 0;
+       index < sizeof(fromIntOperations) / sizeof(*fromIntOperations); ++index)
+    check_from_int_stream(&fromIntOperations[index], random, lhs);
 
   for (size_t i = 0; i < boundaryCount; ++i)
     mpz_clear(boundaries[i]);
