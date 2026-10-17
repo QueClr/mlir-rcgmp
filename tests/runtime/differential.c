@@ -25,20 +25,36 @@ void release_atomic(void *);
 static void *(*retain[2])(void *) = {retain_local, retain_atomic};
 static void (*release[2])(void *) = {release_local, release_atomic};
 
-// Each operation lists its compiled entry points, indexed by atomicity, and the
-// GMP function it must agree with.
+// Each operation lists its compiled and runtime entry points, indexed by
+// atomicity, and the GMP function it must agree with.
 typedef struct {
   const char *name;
   void *(*apply[2])(void *, void *);
+  void *(*runtime[2])(void *, void *, uint32_t);
   void (*oracle)(mpz_ptr, mpz_srcptr, mpz_srcptr);
 } BinaryOperation;
 
 static BinaryOperation binaryOperations[] = {
-    {"addi", {addi_local, addi_atomic}, mpz_add},
-    {"subi", {subi_local, subi_atomic}, mpz_sub},
-    {"muli", {muli_local, muli_atomic}, mpz_mul},
-    {"andi", {andi_local, andi_atomic}, mpz_and},
-    {"xori", {xori_local, xori_atomic}, mpz_xor},
+    {"addi",
+     {addi_local, addi_atomic},
+     {rcgmp_mpz_add, rcgmp_mpz_add_atomic},
+     mpz_add},
+    {"subi",
+     {subi_local, subi_atomic},
+     {rcgmp_mpz_sub, rcgmp_mpz_sub_atomic},
+     mpz_sub},
+    {"muli",
+     {muli_local, muli_atomic},
+     {rcgmp_mpz_mul, rcgmp_mpz_mul_atomic},
+     mpz_mul},
+    {"andi",
+     {andi_local, andi_atomic},
+     {rcgmp_mpz_and, rcgmp_mpz_and_atomic},
+     mpz_and},
+    {"xori",
+     {xori_local, xori_atomic},
+     {rcgmp_mpz_xor, rcgmp_mpz_xor_atomic},
+     mpz_xor},
 };
 
 // A shared operand has an extra reference held by the caller, which must
@@ -213,6 +229,28 @@ static void check_aliased(BinaryOperation *operation, uint32_t atomic,
   }
 }
 
+// Compiled code calls the runtime only when an operand is on the heap or an
+// immediate result overflows, but every runtime entry point accepts any
+// canonical operands and must return a canonical result. Reuse is permitted
+// only for heap operands.
+static OwnershipMode runtimeMode = {0, "runtime entry point"};
+
+static void check_runtime(BinaryOperation *operation, uint32_t atomic,
+                          mpz_srcptr lhs, mpz_srcptr rhs) {
+  BinaryCase test = {operation, atomic, &runtimeMode, {lhs, 0}, {rhs, 0}, 0};
+  mpz_t expected;
+  mpz_init(expected);
+  operation->oracle(expected, lhs, rhs);
+  void *result = operation->runtime[atomic](from_mpz(lhs, atomic),
+                                            from_mpz(rhs, atomic), 0);
+  if (!represents(result, expected))
+    fail(&test, "result differs from GMP or is not canonical");
+  release[atomic](result);
+  mpz_clear(expected);
+  if (allocations != deallocations)
+    fail(&test, "allocations and deallocations do not balance");
+}
+
 static void add_small(mpz_t value, long delta) {
   if (delta < 0)
     mpz_sub_ui(value, value, -delta);
@@ -377,6 +415,10 @@ int main(int argc, char **argv) {
           check_aliased(operation, atomic, x);
         }
       }
+      for (size_t i = 0; i < boundaryCount; ++i)
+        for (size_t j = 0; j < boundaryCount; ++j)
+          if (fits_immediate(boundaries[i]) && fits_immediate(boundaries[j]))
+            check_runtime(operation, atomic, boundaries[i], boundaries[j]);
       seed_stream(random, operation, atomic);
       phase = "random iteration";
       positionCount = iterations;
