@@ -18,15 +18,49 @@
         let
           pkgs = nixpkgs.legacyPackages.${system};
           llvm = pkgs.llvmPackages_23;
+          # FuzzTest and the dependencies it builds, at the versions it pins.
+          fuzztestSources = {
+            FUZZTEST = pkgs.fetchFromGitHub {
+              owner = "google";
+              repo = "fuzztest";
+              rev = "39e5d587af63ba6209e0958a3141460ce003409c";
+              hash = "sha256-KJcX4kckRRRo0pVff9UXqBK8Tobj7m0K+KQUtp+/tVE=";
+            };
+            ABSEIL-CPP = pkgs.fetchFromGitHub {
+              owner = "abseil";
+              repo = "abseil-cpp";
+              tag = "20260817.0";
+              hash = "sha256-CEtLO4il9/jk+bFDDV0rXeX1OkirA0u6nxrSiWq0NPM=";
+            };
+            RE2 = pkgs.fetchFromGitHub {
+              owner = "google";
+              repo = "re2";
+              tag = "2025-11-05";
+              hash = "sha256-0J1HVk+eR7VN0ymucW9dNlT36j16XIfCzcs1EVyEIEU=";
+            };
+            GOOGLETEST = pkgs.fetchFromGitHub {
+              owner = "google";
+              repo = "googletest";
+              tag = "v1.17.0";
+              hash = "sha256-HIHMxAUR4bjmFLoltJeIAVSulVQ6kVuIT2Ku+lwAx/4=";
+            };
+            ANTLR_CPP = pkgs.fetchzip {
+              url = "https://www.antlr.org/download/antlr4-cpp-runtime-4.13.2-source.zip";
+              stripRoot = false;
+              hash = "sha256-kmABwvJ5c3Nss3tpk96yMdKhtYJ2Ep+Y2hVTbuJ1ES8=";
+            };
+          };
         in
         {
-          inherit pkgs llvm;
+          inherit pkgs llvm fuzztestSources;
           nativeBuildInputs = [
             pkgs.cmake
             pkgs.ninja
             pkgs.pkg-config
             llvm.llvm
             llvm.tblgen
+            # clang-scan-deps finds the module dependencies of C++ sources.
+            llvm.clang-tools
             (pkgs.python3.withPackages (ps: [ ps.lit ]))
           ];
           buildInputs = [
@@ -56,7 +90,12 @@
               LLVM_DIR
               MLIR_DIR
               ;
-            cmakeFlags = [ "-DRCGMP_ENABLE_TESTS=ON" ];
+            cmakeFlags = [
+              "-DRCGMP_ENABLE_TESTS=ON"
+            ]
+            ++ nixpkgs.lib.mapAttrsToList (
+              name: source: "-DFETCHCONTENT_SOURCE_DIR_${name}=${source}"
+            ) env.fuzztestSources;
             doCheck = true;
             checkPhase = ''
               runHook preCheck
@@ -80,7 +119,6 @@
               LLVM_DIR
               MLIR_DIR
               ;
-            packages = [ env.llvm.clang-tools ];
           };
         }
       );
@@ -108,9 +146,9 @@
                     (lib.fileset.fileFilter (
                       file:
                       lib.any file.hasExt [
-                        "c"
                         "h"
                         "cpp"
+                        "cppm"
                       ]
                     ) ./.)
                   ];
@@ -118,7 +156,7 @@
               }
               ''
                 cd "$src"
-                find . -type f \( -name '*.c' -o -name '*.h' -o -name '*.cpp' \) -print0 \
+                find . -type f \( -name '*.h' -o -name '*.cpp' -o -name '*.cppm' \) -print0 \
                   | xargs -0 clang-format --dry-run --Werror
                 nixfmt --check flake.nix
                 touch "$out"

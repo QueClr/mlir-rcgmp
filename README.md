@@ -66,9 +66,11 @@ and checks that C/C++ sources pass `clang-format` and `flake.nix` passes
 `nixfmt`; `nix fmt flake.nix` formats the flake.
 
 Outside Nix, install LLVM/MLIR 23 development packages, GMP 6.2 or newer,
-CMake 3.28 or newer, Ninja, Python with `lit`, and LLVM's `FileCheck`. Set
-`LLVM_DIR` and `MLIR_DIR` to their CMake package directories if needed.
-Use `-DGMP_ROOT=/path/to/gmp` for a custom GMP prefix, or set
+CMake 3.28 or newer, Ninja, Python with `lit`, and LLVM's `FileCheck`. The
+runtime needs a C++26 compiler with module support, such as Clang 23 with
+`clang-scan-deps`. Configuring the tests downloads FuzzTest and its
+dependencies. Set `LLVM_DIR` and `MLIR_DIR` to their CMake package directories
+if needed. Use `-DGMP_ROOT=/path/to/gmp` for a custom GMP prefix, or set
 `GMP_INCLUDE_DIR` and `GMP_LIBRARY` separately for split installations.
 
 ## Structure
@@ -83,7 +85,8 @@ Use `-DGMP_ROOT=/path/to/gmp` for a custom GMP prefix, or set
 - `lib/Conversion/ConvertRCGMPBridgeToLLVM.cpp`: bridges to LLVM instructions
   and runtime calls.
 - `lib/Conversion/ConvertRCGMPToLLVM.cpp`: type conversion and registration.
-- `runtime`: C runtime, linked as `RCGMP::Runtime`.
+- `runtime`: C++ modules implementing the C ABI in `RCGMP/Runtime`, linked as
+  `RCGMP::Runtime`.
 - `tests`: IR checks and native tests compiled through the complete lowering.
 
 ## Lowering and representation
@@ -145,7 +148,7 @@ can overflow the immediate range when both operands are immediate.
 The slow branch checks heap uniqueness with `rcgmp.bridge.mpz.is_unique`, then
 packs reuse permissions with `arith` and makes an ordinary `func.call` to
 `rcgmp_mpz_add` or `rcgmp_mpz_add_atomic`. Separate entry points preserve the
-source types; both use the same C implementation. Atomic uniqueness uses an
+source types; both use the same implementation. Atomic uniqueness uses an
 acquire load. The runtime checks capacity and reuses either unique operand
 when possible, otherwise allocating through the configured hooks. It uses
 [GMP's low-level limb operations](https://gmplib.org/manual/Low_002dlevel-Functions)
@@ -175,11 +178,12 @@ void *rcgmp_allocate(size_t size, size_t alignment);
 void rcgmp_dealloc(void *pointer, size_t size, size_t alignment);
 ```
 
-The default implementation uses `malloc` and `free`. To supply an allocator,
-build with `-DRCGMP_RUNTIME_DEFAULT_ALLOCATOR=OFF` and link definitions of both
-functions. Deallocation receives the original allocation size and alignment.
-Allocation must return suitably aligned storage or null; the runtime aborts on
-allocation failure. Hooks must support concurrent calls when atomic integers
+The default implementation uses the aligned global `operator new` and
+`operator delete`. To supply an allocator, build with
+`-DRCGMP_RUNTIME_DEFAULT_ALLOCATOR=OFF` and link definitions of both functions.
+Deallocation receives the original allocation size and alignment. Allocation
+must return suitably aligned storage or null; the runtime aborts on allocation
+failure. Hooks must support concurrent calls when atomic integers
 are used across threads. No allocator pointer is stored in each integer.
 
 `RCGMP::Runtime` links GMP through `GMP::GMP`; the dialect library does not
