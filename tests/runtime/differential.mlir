@@ -1,5 +1,5 @@
 // RUN: %rcgmp-opt %s -convert-rcgmp-to-scf -convert-scf-to-cf -convert-to-llvm -reconcile-unrealized-casts -o /dev/null
-// Entry points compared against GMP by differential.c.
+// Entry points compared against GMP by differential.cpp.
 func.func @addi_local(%x: !rcgmp.mpz, %y: !rcgmp.mpz) -> !rcgmp.mpz {
   %r = rcgmp.addi %x, %y : !rcgmp.mpz
   return %r : !rcgmp.mpz

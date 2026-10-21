@@ -1,1 +1,5 @@
 BasedOnStyle: LLVM
+# Keeps C++26 deleted-function messages as = delete("reason").
+SpaceBeforeParens: Custom
+SpaceBeforeParensOptions:
+  AfterPlacementOperator: false
