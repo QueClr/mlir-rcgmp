@@ -8,6 +8,8 @@
 #include <mlir/Interfaces/InferTypeOpInterface.h>
 #include <mlir/Interfaces/SideEffectInterfaces.h>
 
+#include "RCGMP/IR/RCGMPEnums.h.inc"
+
 #define GET_OP_CLASSES
 #include "RCGMP/IR/RCGMPOps.h.inc"
 

@@ -1,5 +1,5 @@
-// Compares each compiled binary operation and integer construction with GMP,
-// on boundary operands and on operands that FuzzTest generates.
+// Compares each compiled binary operation, comparison, and integer construction
+// with GMP, on boundary operands and on operands that FuzzTest generates.
 #include "RCGMP/Runtime/Mpz.h"
 #include <fuzztest/fuzztest.h>
 #include <gmock/gmock.h>
@@ -58,6 +58,18 @@ void *from_signed_i129_atomic(std::uint64_t, std::uint64_t, std::uint64_t);
 void *from_unsigned_i129_atomic(std::uint64_t, std::uint64_t, std::uint64_t);
 void *constant_local(std::size_t);
 void *constant_atomic(std::size_t);
+std::int32_t cmpi_eq_local(void *, void *);
+std::int32_t cmpi_eq_atomic(void *, void *);
+std::int32_t cmpi_ne_local(void *, void *);
+std::int32_t cmpi_ne_atomic(void *, void *);
+std::int32_t cmpi_slt_local(void *, void *);
+std::int32_t cmpi_slt_atomic(void *, void *);
+std::int32_t cmpi_sle_local(void *, void *);
+std::int32_t cmpi_sle_atomic(void *, void *);
+std::int32_t cmpi_sgt_local(void *, void *);
+std::int32_t cmpi_sgt_atomic(void *, void *);
+std::int32_t cmpi_sge_local(void *, void *);
+std::int32_t cmpi_sge_atomic(void *, void *);
 }
 
 namespace {
@@ -391,6 +403,139 @@ FUZZ_TEST(Differential, ConstantsMatchGmp)
     .WithDomains(AnyOperator(), AnyCounting(), AnyConstant(), AnyInteger(),
                  AnySpare(), fuzztest::Arbitrary<bool>());
 
+// Compiled comparisons from compare.mlir, indexed by counting.
+constexpr std::array<Comparisons, 2> comparisons{{
+    {cmpi_eq_local, cmpi_ne_local, cmpi_slt_local, cmpi_sle_local,
+     cmpi_sgt_local, cmpi_sge_local},
+    {cmpi_eq_atomic, cmpi_ne_atomic, cmpi_slt_atomic, cmpi_sle_atomic,
+     cmpi_sgt_atomic, cmpi_sge_atomic},
+}};
+
+// Comparisons borrow their operands, so the caller's ownership needs no
+// variation beyond whether a heap operand is counted. An aliased rhs is the
+// lhs itself, with no extra reference.
+struct ComparisonCase {
+  Counting counting;
+  Immortality immortal;
+  bool aliased;
+  Operand lhs, rhs;
+  // The compiled constants, by index, that hold the lhs or the rhs.
+  std::optional<std::size_t> lhsConstant = std::nullopt,
+                             rhsConstant = std::nullopt;
+
+  std::string describe() const {
+    std::string_view immortality = immortal.lhs && immortal.rhs
+                                       ? ", immortal operands"
+                                   : immortal.lhs ? ", immortal lhs"
+                                   : immortal.rhs ? ", immortal rhs"
+                                                  : "";
+    return std::format("cmpi ({}{}{}): lhs = {}, rhs = {}",
+                       rcgmp::name(counting), aliased ? ", aliased" : "",
+                       immortality, lhs.describe(lhsConstant.has_value()),
+                       rhs.describe(rhsConstant.has_value()));
+  }
+};
+
+// Drops the caller's reference to an operand made by makeOperand, or frees it
+// if it is immortal. Compiled constants are static.
+void dropOperand(void *operand, Counting counting, bool constant,
+                 bool immortal) {
+  if (constant || Handle(operand).isImmediate())
+    return;
+  if (immortal)
+    rcgmp_mpz_free(operand, counting == Counting::atomic);
+  else
+    releases[std::to_underlying(counting)](operand);
+}
+
+// Complements the spare limbs of a heap operand made by makeOperand. Operands
+// otherwise share one pattern of stale limbs, which would hide a comparison
+// that reads past equally long magnitudes.
+void complementSpare(void *operand) {
+  if (Handle(operand).isImmediate())
+    return;
+  rcgmp::Mpz &heap = Handle(operand).heap();
+  for (rcgmp::Limb &limb : heap.limbs().subspan(heap.count()))
+    limb = ~limb;
+}
+
+void checkComparison(const ComparisonCase &test) {
+  SCOPED_TRACE(test.describe());
+  AllocationCounter balance;
+  void *x =
+      makeOperand(test.lhs, test.lhsConstant, test.counting, test.immortal.lhs);
+  void *y = test.aliased ? x
+                         : makeOperand(test.rhs, test.rhsConstant,
+                                       test.counting, test.immortal.rhs);
+  if (!test.aliased && !test.rhsConstant)
+    complementSpare(y);
+  const Integer &rhs = test.aliased ? test.lhs.value : test.rhs.value;
+  AllocationCounter counter;
+  checkComparison(comparisons[std::to_underlying(test.counting)], x, y,
+                  test.lhs.value, rhs, test.counting);
+  EXPECT_EQ(counter.allocations(), 0u) << "comparison allocated";
+  EXPECT_EQ(counter.deallocations(), 0u) << "comparison freed an operand";
+  dropOperand(x, test.counting, test.lhsConstant.has_value(),
+              test.immortal.lhs);
+  if (!test.aliased)
+    dropOperand(y, test.counting, test.rhsConstant.has_value(),
+                test.immortal.rhs);
+  EXPECT_TRUE(balance.balanced())
+      << "allocations and deallocations do not balance";
+}
+
+fuzztest::Domain<Immortality> AnyImmortality() {
+  return fuzztest::StructOf<Immortality>(fuzztest::Arbitrary<bool>(),
+                                         fuzztest::Arbitrary<bool>());
+}
+
+// Spare limbs hold stale values that differ between the operands, which a
+// comparison must not read.
+void ComparisonsMatchGmp(Counting counting,
+                         const std::pair<Integer, Integer> &operands,
+                         std::size_t lhsSpare, std::size_t rhsSpare,
+                         Immortality immortal) {
+  Operand lhs{operands.first, lhsSpare}, rhs{operands.second, rhsSpare};
+  checkComparison({counting, immortal, false, lhs, rhs});
+  checkComparison({counting, immortal, true, lhs, lhs});
+}
+FUZZ_TEST(Differential, ComparisonsMatchGmp)
+    .WithDomains(AnyCounting(), AnyOperands(), AnySpare(), AnySpare(),
+                 AnyImmortality());
+
+// A compiled constant replaces either operand.
+void ConstantComparisonsMatchGmp(Counting counting, std::size_t constant,
+                                 const Integer &other, std::size_t spare,
+                                 bool immortal, bool left) {
+  Operand c{constantValue(constant)}, y{other, spare};
+  ComparisonCase test{counting, {false, false}, false, c, y, constant};
+  test.immortal.rhs = immortal;
+  if (!left) {
+    std::swap(test.lhs, test.rhs);
+    std::swap(test.lhsConstant, test.rhsConstant);
+    std::swap(test.immortal.lhs, test.immortal.rhs);
+  }
+  checkComparison(test);
+}
+FUZZ_TEST(Differential, ConstantComparisonsMatchGmp)
+    .WithDomains(AnyCounting(), AnyConstant(), AnyInteger(), AnySpare(),
+                 fuzztest::Arbitrary<bool>(), fuzztest::Arbitrary<bool>());
+
+// Every pair of compiled constants. A constant compared with itself is the
+// same object or immediate on both sides.
+TEST(Differential, ComparesConstants) {
+  for (Counting counting : countings)
+    for (std::size_t i = 0; i < constantValues.size(); ++i)
+      for (std::size_t j = 0; j < constantValues.size(); ++j)
+        checkComparison({counting,
+                         {false, false},
+                         false,
+                         {constantValue(i)},
+                         {constantValue(j)},
+                         i,
+                         j});
+}
+
 // A compiled constant, by index.
 struct Constant {
   std::size_t index;
@@ -425,6 +570,10 @@ void ChainsMatchGmp(Counting counting, const Operand &start,
                                  : std::get<Integer>(step.operand);
     void *rhs = constant ? constants[index](constant->index)
                          : makeOperand({operand, step.spare}, counting);
+    // Compare the result so far, with the headroom and stale limbs that
+    // earlier operations leave behind, before the operation consumes it.
+    checkComparison(comparisons[index], result, rhs, accumulator, operand,
+                    counting);
     Integer expected;
     operation(step.op).oracle(expected, accumulator, operand);
     result = operation(step.op).compiled[index](result, rhs);

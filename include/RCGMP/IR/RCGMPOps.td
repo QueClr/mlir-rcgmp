@@ -2,6 +2,7 @@
 #define RCGMP_IR_OPS_TD
 
 // Public operations with explicit ownership semantics.
+include "RCGMP/IR/RCGMPEnums.td"
 include "RCGMP/IR/RCGMPOpBase.td"
 
 // A consumed reference may be decremented, reused, or freed.
@@ -115,6 +116,34 @@ def RCGMP_XOrIOp : RCGMP_BinaryOp<"xori", [{
     sign extension for negative integers.
   }], [Commutative]> {
   let summary = "Consume two integer references and produce their bitwise XOR";
+}
+
+def RCGMP_CmpIOp : RCGMPOp<"cmpi", [SameTypeOperands, RCGMP_NotSpeculatable]> {
+  let summary = "Compare two borrowed integers";
+  let description = [{
+    Compare the values of the operands with the predicate: equal (`eq`), not
+    equal (`ne`), less than (`slt`), less than or equal (`sle`), greater than
+    (`sgt`), or greater than or equal (`sge`). The predicates are the signed
+    predicates of `arith.cmpi`. Comparison is exact.
+
+    Both operands are borrowed: the comparison neither consumes nor creates a
+    reference, and leaves reference counts unchanged. The caller must own a
+    reference to each operand, unless it is the result of `rcgmp.constant`, and
+    still owns that reference afterwards, so releasing it remains the caller's
+    responsibility. The same value may appear as both operands without
+    `rcgmp.retain`.
+
+    ```mlir
+    %less = rcgmp.cmpi slt, %x, %y : !rcgmp.mpz
+    rcgmp.release %x : !rcgmp.mpz
+    rcgmp.release %y : !rcgmp.mpz
+    ```
+  }];
+  let arguments = (ins RCGMP_CmpIPredicateAttr:$predicate,
+      Arg<RCGMP_MpzType, "borrowed lhs", [MemRead]>:$lhs,
+      Arg<RCGMP_MpzType, "borrowed rhs", [MemRead]>:$rhs);
+  let results = (outs I1:$result);
+  let assemblyFormat = "$predicate `,` $lhs `,` $rhs attr-dict `:` type($lhs)";
 }
 
 #endif

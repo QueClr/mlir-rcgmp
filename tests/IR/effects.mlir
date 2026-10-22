@@ -42,3 +42,19 @@ func.func @uniqueness(%x: !rcgmp.mpz) -> (i1, i1, i1, i1) {
   %c = rcgmp.bridge.mpz.is_unique %x : !rcgmp.mpz
   return %a, %b, %overflow, %c : i1, i1, i1, i1
 }
+
+// Comparisons only read their borrowed operands: unused ones are erased, and
+// equal ones merge unless a count update intervenes.
+// CHECK-LABEL: func.func @comparisons
+// CHECK: %[[A:.*]] = rcgmp.cmpi slt, %[[X:.*]], %[[Y:.*]] :
+// CHECK-NEXT: rcgmp.retain %[[X]]
+// CHECK-NEXT: %[[C:.*]] = rcgmp.cmpi slt, %[[X]], %[[Y]] :
+// CHECK-NEXT: return %[[A]], %[[A]], %[[C]]
+func.func @comparisons(%x: !rcgmp.mpz, %y: !rcgmp.mpz) -> (i1, i1, i1) {
+  %unused = rcgmp.cmpi eq, %x, %y : !rcgmp.mpz
+  %a = rcgmp.cmpi slt, %x, %y : !rcgmp.mpz
+  %b = rcgmp.cmpi slt, %x, %y : !rcgmp.mpz
+  rcgmp.retain %x : !rcgmp.mpz
+  %c = rcgmp.cmpi slt, %x, %y : !rcgmp.mpz
+  return %a, %b, %c : i1, i1, i1
+}

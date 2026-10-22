@@ -224,6 +224,58 @@ struct XOrILowering : FastPathLowering<XOrILowering> {
   }
 };
 
+struct CmpILowering : FastPathLowering<CmpILowering> {
+  using FastPathLowering::FastPathLowering;
+  using Op = CmpIOp;
+
+  static constexpr bool consumesOperands = false;
+
+  static StringRef getRuntimeName(bool atomic) {
+    return atomic ? "rcgmp_mpz_cmp_atomic" : "rcgmp_mpz_cmp";
+  }
+
+  static Type getRuntimeResultType(Operation *op) {
+    return IntegerType::get(op->getContext(), 32);
+  }
+
+  // The runtime result is negative, zero, or positive, like mpz_cmp, so it
+  // relates to zero as lhs relates to rhs.
+  static Value buildSlowResult(PatternRewriter &rewriter, Location loc,
+                               Operation *op, Value order) {
+    auto zero = arith::ConstantIntOp::create(rewriter, loc, 0, 32);
+    return arith::CmpIOp::create(rewriter, loc, getPredicate(op), order, zero);
+  }
+
+  static FastPath buildFastPath(PatternRewriter &rewriter, Location loc,
+                                Operation *op, ValueRange operands) {
+    Value lhs = operands[0], rhs = operands[1];
+    // 4*n+1 is strictly increasing and fits the signed word over the immediate
+    // range, so tagged immediates compare as their values do.
+    auto result =
+        arith::CmpIOp::create(rewriter, loc, getPredicate(op), lhs, rhs);
+    return {result, allImmediate(rewriter, loc, {lhs, rhs})};
+  }
+
+private:
+  static arith::CmpIPredicate getPredicate(Operation *op) {
+    switch (cast<CmpIOp>(op).getPredicate()) {
+    case CmpIPredicate::eq:
+      return arith::CmpIPredicate::eq;
+    case CmpIPredicate::ne:
+      return arith::CmpIPredicate::ne;
+    case CmpIPredicate::slt:
+      return arith::CmpIPredicate::slt;
+    case CmpIPredicate::sle:
+      return arith::CmpIPredicate::sle;
+    case CmpIPredicate::sgt:
+      return arith::CmpIPredicate::sgt;
+    case CmpIPredicate::sge:
+      return arith::CmpIPredicate::sge;
+    }
+    llvm_unreachable("unknown comparison predicate");
+  }
+};
+
 struct ConvertRCGMPToSCFPass
     : PassWrapper<ConvertRCGMPToSCFPass, OperationPass<ModuleOp>> {
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(ConvertRCGMPToSCFPass)
@@ -239,10 +291,10 @@ struct ConvertRCGMPToSCFPass
     RewritePatternSet patterns(&getContext());
     patterns.add<ConstantLowering, FromIntLowering, RetainLowering,
                  ReleaseLowering, AddILowering, SubILowering, MulILowering,
-                 AndILowering, XOrILowering>(&getContext());
+                 AndILowering, XOrILowering, CmpILowering>(&getContext());
     ConversionTarget target(getContext());
     target.addIllegalOp<ConstantOp, FromIntOp, RetainOp, ReleaseOp, AddIOp,
-                        SubIOp, MulIOp, AndIOp, XOrIOp>();
+                        SubIOp, MulIOp, AndIOp, XOrIOp, CmpIOp>();
     target.markUnknownOpDynamicallyLegal([](Operation *) { return true; });
     if (failed(applyPartialConversion(getOperation(), target,
                                       std::move(patterns))))
