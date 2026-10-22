@@ -103,6 +103,10 @@ rcgmp_native_test(addition)
 rcgmp_native_test(binary)
 rcgmp_native_test(signed-overflow)
 rcgmp_native_test(constant)
+rcgmp_native_test(compare)
 rcgmp_native_test(differential)
+# The differential harness also exercises the comparisons in compare.mlir.
+target_sources(rcgmp-differential PRIVATE
+  ${CMAKE_CURRENT_BINARY_DIR}/compare.o)
 find_package(Threads REQUIRED)
 target_link_libraries(rcgmp-addition PRIVATE Threads::Threads)

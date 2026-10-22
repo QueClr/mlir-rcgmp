@@ -35,6 +35,8 @@ static void printSignedInteger(OpAsmPrinter &printer, Operation *,
 
 } // namespace mlir::rcgmp
 
+#include "RCGMP/IR/RCGMPEnums.cpp.inc"
+
 #define GET_OP_CLASSES
 #include "RCGMP/IR/RCGMPOps.cpp.inc"
 

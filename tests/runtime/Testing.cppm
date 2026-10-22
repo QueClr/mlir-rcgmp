@@ -9,8 +9,10 @@ module;
 #include <bit>
 #include <cstddef>
 #include <cstdint>
+#include <format>
 #include <optional>
 #include <ostream>
+#include <ranges>
 #include <span>
 #include <string>
 #include <string_view>
@@ -231,6 +233,56 @@ void checkBinary(void *(*apply)(void *, void *), Oracle oracle,
     rcgmp_mpz_release(y, atomic);
   }
   rcgmp_mpz_release(result, atomic);
+}
+
+// A predicate of rcgmp.cmpi and whether it holds when mpz_cmp returns order.
+struct Predicate {
+  std::string_view name;
+  bool (*holds)(int order);
+};
+
+constexpr std::array<Predicate, 6> predicates{{
+    {"eq", [](int order) { return order == 0; }},
+    {"ne", [](int order) { return order != 0; }},
+    {"slt", [](int order) { return order < 0; }},
+    {"sle", [](int order) { return order <= 0; }},
+    {"sgt", [](int order) { return order > 0; }},
+    {"sge", [](int order) { return order >= 0; }},
+}};
+
+// Compiled comparisons in the order of predicates, each returning 1 when its
+// predicate holds and 0 otherwise.
+using Comparisons =
+    std::array<std::int32_t (*)(void *, void *), predicates.size()>;
+
+// The reference count of a heap operand.
+std::optional<std::uintptr_t> count(void *operand, Counting counting) {
+  if (Handle(operand).isImmediate())
+    return std::nullopt;
+  return references(operand, counting);
+}
+
+// Compares x and y, holding lhs and rhs, with every compiled predicate and with
+// the runtime entry point, which also accepts immediates. Both operands are
+// borrowed, so each keeps its value and reference count.
+void checkComparison(const Comparisons &compiled, void *x, void *y,
+                     const Integer &lhs, const Integer &rhs,
+                     Counting counting) {
+  SCOPED_TRACE(std::format("cmpi ({}): lhs = {}, rhs = {}", name(counting),
+                           lhs.hex(), rhs.hex()));
+  auto sign = [](int order) { return (order > 0) - (order < 0); };
+  int order = mpz_cmp(lhs, rhs);
+  std::optional<std::uintptr_t> xCount = count(x, counting),
+                                yCount = count(y, counting);
+  for (auto [predicate, compare] : std::views::zip(predicates, compiled))
+    EXPECT_EQ(compare(x, y), predicate.holds(order) ? 1 : 0) << predicate.name;
+  auto runtime =
+      counting == Counting::atomic ? rcgmp_mpz_cmp_atomic : rcgmp_mpz_cmp;
+  EXPECT_EQ(sign(runtime(x, y)), sign(order));
+  EXPECT_THAT(x, Represents(lhs));
+  EXPECT_THAT(y, Represents(rhs));
+  EXPECT_EQ(count(x, counting), xCount);
+  EXPECT_EQ(count(y, counting), yCount);
 }
 
 // How a derived operand relates to another x: as ±x + delta for

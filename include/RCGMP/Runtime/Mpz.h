@@ -39,6 +39,12 @@ void *rcgmp_mpz_and_atomic(void *lhs, void *rhs, uint32_t reuse);
 void *rcgmp_mpz_xor(void *lhs, void *rhs, uint32_t reuse);
 void *rcgmp_mpz_xor_atomic(void *lhs, void *rhs, uint32_t reuse);
 
+// Borrow both operands and return a negative, zero, or positive value as lhs is
+// less than, equal to, or greater than rhs. Reference counts are unchanged.
+// Both entry points share one implementation.
+int32_t rcgmp_mpz_cmp(void *lhs, void *rhs);
+int32_t rcgmp_mpz_cmp_atomic(void *lhs, void *rhs);
+
 // Only for a heap value whose final decrement has already completed.
 void rcgmp_mpz_free(void *value, uint32_t atomic);
 
