@@ -73,24 +73,9 @@ target_link_libraries(rcgmp-gmp-link PRIVATE GMP::GMP)
 rcgmp_gtest(rcgmp-gmp-link)
 
 # Compile the complete MLIR -> SCF -> LLVM IR path and exercise its native ABI.
-find_program(RCGMP_MLIR_TRANSLATE NAMES mlir-translate
-             HINTS ${LLVM_TOOLS_BINARY_DIR} REQUIRED)
-find_program(RCGMP_CLANG NAMES clang HINTS ${LLVM_TOOLS_BINARY_DIR} REQUIRED)
-# Lowers runtime/<name>.mlir to an object file and sets object to its path.
-function(rcgmp_lower_mlir name object)
-  set(base ${CMAKE_CURRENT_BINARY_DIR}/${name})
-  add_custom_command(OUTPUT ${base}.o
-    COMMAND $<TARGET_FILE:rcgmp-opt> ${CMAKE_CURRENT_SOURCE_DIR}/runtime/${name}.mlir
-      -convert-rcgmp-to-scf -convert-scf-to-cf -convert-to-llvm
-      -reconcile-unrealized-casts -o ${base}.mlir
-    COMMAND ${RCGMP_MLIR_TRANSLATE} --mlir-to-llvmir ${base}.mlir -o ${base}.ll
-    COMMAND ${RCGMP_CLANG} -O2 -Wno-unused-command-line-argument -Wno-override-module -c ${base}.ll -o ${base}.o
-    DEPENDS rcgmp-opt runtime/${name}.mlir VERBATIM)
-  set(${object} ${base}.o PARENT_SCOPE)
-endfunction()
-
+include(RCGMPLowering)
 function(rcgmp_native_test name)
-  rcgmp_lower_mlir(${name} object)
+  rcgmp_lower_mlir(runtime/${name}.mlir object)
   add_executable(rcgmp-${name} runtime/${name}.cpp ${object})
   target_compile_definitions(rcgmp-${name} PRIVATE RCGMP_TEST_ALLOCATOR)
   target_link_libraries(rcgmp-${name} PRIVATE RCGMPTestAllocator RCGMPTesting)
@@ -100,7 +85,7 @@ endfunction()
 rcgmp_native_test(construction)
 if(RCGMP_RUNTIME_DEFAULT_ALLOCATOR)
   add_executable(rcgmp-construction-default runtime/construction.cpp
-    ${CMAKE_CURRENT_BINARY_DIR}/construction.o)
+    ${CMAKE_CURRENT_BINARY_DIR}/runtime/construction.o)
   target_link_libraries(rcgmp-construction-default PRIVATE RCGMPTesting)
   rcgmp_gtest(rcgmp-construction-default)
 endif()
@@ -118,11 +103,11 @@ add_executable(rcgmp-differential
   runtime/differential/binary.cpp runtime/differential/chain.cpp
   runtime/differential/compare.cpp runtime/differential/construction.cpp
   runtime/differential/counting.cpp runtime/differential/match.cpp
-  runtime/differential/unary.cpp ${CMAKE_CURRENT_BINARY_DIR}/compare.o)
+  runtime/differential/unary.cpp ${CMAKE_CURRENT_BINARY_DIR}/runtime/compare.o)
 target_sources(rcgmp-differential PRIVATE FILE_SET CXX_MODULES FILES
   runtime/differential/Differential.cppm)
 foreach(name binary constant counting from-int match unary)
-  rcgmp_lower_mlir(differential/${name} object)
+  rcgmp_lower_mlir(runtime/differential/${name}.mlir object)
   target_sources(rcgmp-differential PRIVATE ${object})
 endforeach()
 target_link_libraries(rcgmp-differential PRIVATE RCGMPTestAllocator

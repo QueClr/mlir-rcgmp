@@ -2,6 +2,7 @@ cmake_minimum_required(VERSION 3.28)
 project(RCGMP LANGUAGES C CXX VERSION 0.1.0)
 
 option(RCGMP_ENABLE_TESTS "Build rcgmp tests" ON)
+option(RCGMP_ENABLE_BENCHMARKS "Build rcgmp benchmarks" OFF)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -36,6 +37,9 @@ add_subdirectory(tool)
 if(RCGMP_ENABLE_TESTS)
   enable_testing()
   add_subdirectory(tests)
+endif()
+if(RCGMP_ENABLE_BENCHMARKS)
+  add_subdirectory(bench)
 endif()
 
 install(DIRECTORY include/RCGMP DESTINATION include
