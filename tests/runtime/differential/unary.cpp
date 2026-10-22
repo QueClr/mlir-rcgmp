@@ -85,10 +85,6 @@ void checkUnary(const UnaryCase &test) {
       << "allocations and deallocations do not balance";
 }
 
-// The sharing and immortality of an operand.
-constexpr std::array<std::pair<bool, bool>, 4> unaryOwnerships{
-    {{false, false}, {true, false}, {false, true}, {true, true}}};
-
 void UnaryMatchesGmp(UnaryOperator op, Counting counting, const Integer &value,
                      std::size_t spare) {
   for (auto [shared, immortal] : unaryOwnerships)

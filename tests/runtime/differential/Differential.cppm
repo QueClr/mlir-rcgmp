@@ -42,6 +42,10 @@ void *negi_local(void *);
 void *negi_atomic(void *);
 void *absi_local(void *);
 void *absi_atomic(void *);
+void *shli_local(void *, std::uint64_t);
+void *shli_atomic(void *, std::uint64_t);
+void *shrsi_local(void *, std::uint64_t);
+void *shrsi_atomic(void *, std::uint64_t);
 void *retain_local(void *);
 void *retain_atomic(void *);
 void release_local(void *);
@@ -198,6 +202,54 @@ fuzztest::Domain<UnaryOperator> AnyUnaryOperator() {
   return fuzztest::ElementOf(
       std::vector(unaryOperators.begin(), unaryOperators.end()));
 }
+
+// The sharing and immortality of the integer operand of a unary operation or
+// a shift.
+constexpr std::array<std::pair<bool, bool>, 4> unaryOwnerships{
+    {{false, false}, {true, false}, {false, true}, {true, true}}};
+
+enum class ShiftOperator { shli, shrsi };
+
+// The compiled and runtime entry points of a shift, indexed by counting, and
+// the GMP function it must agree with.
+struct ShiftOperation {
+  std::string_view name;
+  std::array<void *(*)(void *, std::uint64_t), 2> compiled;
+  std::array<void *(*)(void *, std::uintptr_t, std::uint32_t), 2> runtime;
+  void (*oracle)(mpz_ptr, mpz_srcptr, mp_bitcnt_t);
+};
+
+constexpr std::array<ShiftOperation, 2> shiftOperations{{
+    {"shli",
+     {shli_local, shli_atomic},
+     {rcgmp_mpz_shl, rcgmp_mpz_shl_atomic},
+     mpz_mul_2exp},
+    {"shrsi",
+     {shrsi_local, shrsi_atomic},
+     {rcgmp_mpz_shr, rcgmp_mpz_shr_atomic},
+     mpz_fdiv_q_2exp},
+}};
+
+constexpr std::array shiftOperators{ShiftOperator::shli, ShiftOperator::shrsi};
+
+const ShiftOperation &operation(ShiftOperator op) {
+  return shiftOperations[std::to_underlying(op)];
+}
+
+template <typename Sink> void AbslStringify(Sink &sink, ShiftOperator op) {
+  sink.Append(operation(op).name);
+}
+
+fuzztest::Domain<ShiftOperator> AnyShiftOperator() {
+  return fuzztest::ElementOf(
+      std::vector(shiftOperators.begin(), shiftOperators.end()));
+}
+
+// A shift by a number of bits.
+struct Shift {
+  ShiftOperator op;
+  std::uint64_t amount;
+};
 
 // A heap operand is allocated with spare limbs beyond its magnitude, as results
 // of earlier operations often are, so that an operation may reuse it in place.

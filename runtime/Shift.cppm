@@ -28,20 +28,33 @@ inline Mpz &shiftDestination(Handle value, bool reuse, std::size_t required) {
 // the remaining bits. The sign is unchanged.
 export template <Counting counting>
 Handle shiftLeft(Handle value, std::uintptr_t amount, bool reuse) {
-  Magnitude source(value);
-  if (!source.count() || !amount)
-    return value; // The consumed reference becomes the result's.
   std::size_t limbs = amount / limbBits;
   unsigned bits = amount % limbBits;
-  std::size_t count = source.count();
-  // Allocation rejects the saturated count.
+  if (value.isImmediate()) {
+    std::intptr_t integer = value.value();
+    if (!integer || !amount)
+      return value;
+    Limb magnitude = integer < 0 ? -static_cast<Limb>(integer) : integer;
+    // Allocation rejects the saturated count.
+    Mpz &result = allocateResult(std::add_sat(limbs, std::size_t{2}));
+    Limb *out = result.limbs().data();
+    std::fill(out, out + limbs, Limb{0});
+    out[limbs] = magnitude << bits;
+    out[limbs + 1] = bits ? magnitude >> (limbBits - bits) : 0;
+    result.setMagnitude(limbs + 1 + (out[limbs + 1] != 0), integer < 0);
+    return normalize<counting>(result);
+  }
+  if (!amount)
+    return value; // The consumed reference becomes the result's.
+  Mpz &heap = value.heap();
+  std::size_t count = heap.count();
   std::size_t required =
       std::add_sat(std::add_sat(count, limbs), std::size_t{bits != 0});
   Mpz &result = shiftDestination(value, reuse, required);
   Limb *out = result.limbs().data();
-  const Limb *in = source.limbs.data();
-  // Both move limbs to higher addresses, which the shared storage of a
-  // reused operand permits.
+  const Limb *in = heap.limbs().data();
+  // Both move limbs to higher addresses, which the shared storage of a reused
+  // operand permits.
   std::size_t total = limbs + count;
   if (bits) {
     out[total] = mpn_lshift(out + limbs, in, count, bits);
@@ -50,10 +63,12 @@ Handle shiftLeft(Handle value, std::uintptr_t amount, bool reuse) {
     std::copy_backward(in, in + count, out + total);
   }
   std::fill(out, out + limbs, Limb{0});
-  result.setMagnitude(total, source.negative);
-  if (Handle(result) != value)
+  result.setMagnitude(total, heap.negative());
+  if (&result != &heap)
     release<counting>(value);
-  return normalize<counting>(result);
+  // The top limb is nonzero, and no multiple of a heap magnitude fits an
+  // immediate.
+  return Handle(result);
 }
 
 // Divides by 2^amount, rounding toward negative infinity: a negative integer
@@ -97,10 +112,13 @@ Handle shiftRight(Handle value, std::uintptr_t amount, bool reuse) {
   if (inexact)
     if (Limb carry = mpn_add_1(out, out, total, 1))
       out[total++] = carry;
+  // Only shifting by bits clears the top limb, and then not the limb below,
+  // which receives the top limb's nonzero bits.
+  total -= !out[total - 1];
   result.setMagnitude(total, negative);
   if (Handle(result) != value)
     release<counting>(value);
-  return normalize<counting>(result);
+  return total > 1 ? Handle(result) : normalize<counting>(result);
 }
 
 // Adapts a shift to the runtime ABI, where bit 0 of reuse permits reusing the
