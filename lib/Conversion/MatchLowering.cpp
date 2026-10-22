@@ -526,7 +526,8 @@ private:
   }
 
   Value loadLimb(unsigned position) {
-    return bridge::MpzLimbOp::create(rewriter, loc, word, scrutinee, position);
+    Value index = arith::ConstantIndexOp::create(rewriter, loc, position);
+    return bridge::MpzLimbOp::create(rewriter, loc, word, scrutinee, index);
   }
 
   // Selects among magnitudes in [low, high], which have count limbs and share

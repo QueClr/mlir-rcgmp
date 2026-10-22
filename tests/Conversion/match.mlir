@@ -158,15 +158,19 @@ func.func @points(%n: !rcgmp.mpz, %a: i64, %b: i64) -> i64 {
 // CHECK-LABEL: func.func @limbs
 // CHECK: %[[SIZE:.*]] = rcgmp.bridge.mpz.size %[[N:.*]] :
 // CHECK: arith.cmpi eq, %[[SIZE]], %{{.*}}
-// CHECK: %[[HIGH:.*]] = rcgmp.bridge.mpz.limb %[[N]][1]
+// CHECK: %[[ONE:.*]] = arith.constant 1 : index
+// CHECK-NEXT: %[[HIGH:.*]] = rcgmp.bridge.mpz.limb %[[N]][%[[ONE]]]
 // CHECK: arith.cmpi eq, %[[HIGH]], %{{.*}}
-// CHECK: %[[LOW:.*]] = rcgmp.bridge.mpz.limb %[[N]][0]
+// CHECK: %[[ZERO:.*]] = arith.constant 0 : index
+// CHECK-NEXT: %[[LOW:.*]] = rcgmp.bridge.mpz.limb %[[N]][%[[ZERO]]]
 // CHECK: arith.cmpi ult, %[[LOW]], %{{.*}}
 // LLVM-LABEL: llvm.func @limbs
 // LLVM: llvm.getelementptr inbounds %{{.*}}[1] : (!llvm.ptr) -> !llvm.ptr, i64
 // LLVM-NEXT: llvm.load %{{.*}} {alignment = 8 : i64} : !llvm.ptr -> i64
-// LLVM: llvm.getelementptr inbounds %{{.*}}[4] : (!llvm.ptr) -> !llvm.ptr, i64
-// LLVM: llvm.getelementptr inbounds %{{.*}}[3] : (!llvm.ptr) -> !llvm.ptr, i64
+// Limb i is word 3 + i of the heap integer.
+// LLVM: %[[FIRST:.*]] = llvm.mlir.constant(3 : i64)
+// LLVM-NEXT: %[[WORD:.*]] = llvm.add %{{.*}}, %[[FIRST]] overflow<nuw>
+// LLVM-NEXT: llvm.getelementptr inbounds %{{.*}}[%[[WORD]]] : (!llvm.ptr, i64) -> !llvm.ptr, i64
 func.func @limbs(%n: !rcgmp.mpz, %a: i64, %b: i64) -> i64 {
   %r = rcgmp.match %n : !rcgmp.mpz -> i64 {
     case 18446744073709551617, 18446744073709551618 {
@@ -179,10 +183,10 @@ func.func @limbs(%n: !rcgmp.mpz, %a: i64, %b: i64) -> i64 {
   return %r : i64
 }
 
-// Long shared limb runs compare the whole integer in the runtime.
+// Long shared limb runs compare the whole integer.
 // CHECK-LABEL: func.func @run
 // CHECK: rcgmp.bridge.mpz.size
-// CHECK-NOT: rcgmp.bridge.mpz.limb
+// CHECK-NOT: arith.constant 0 : index
 // CHECK: func.call @rcgmp_mpz_cmp
 func.func @run(%n: !rcgmp.mpz, %a: i64, %b: i64) -> i64 {
   %r = rcgmp.match %n : !rcgmp.mpz -> i64 {

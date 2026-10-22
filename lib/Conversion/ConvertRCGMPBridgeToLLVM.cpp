@@ -6,8 +6,6 @@
 #include <mlir/Interfaces/FunctionInterfaces.h>
 #include <mlir/Transforms/DialectConversion.h>
 
-#include <limits>
-
 namespace mlir::rcgmp {
 namespace {
 using namespace bridge;
@@ -163,6 +161,30 @@ struct PromoteLowering : OpConversionPattern<MpzPromoteOp> {
     auto input = cast<IntegerType>(adaptor.getValue().getType());
     auto pointer = LLVM::LLVMPointerType::get(op.getContext());
     size_t count = llvm::divideCeil(input.getWidth(), word.getWidth());
+    auto zero = integerConstant(rewriter, loc, input, 0);
+    Value negative = integerConstant(rewriter, loc, rewriter.getI1Type(), 0);
+    Value magnitude = adaptor.getValue();
+    if (!op.getIsUnsigned()) {
+      negative = LLVM::ICmpOp::create(rewriter, loc, LLVM::ICmpPredicate::slt,
+                                      magnitude, zero);
+      auto negated = LLVM::SubOp::create(rewriter, loc, zero, magnitude);
+      magnitude =
+          LLVM::SelectOp::create(rewriter, loc, negative, negated, magnitude);
+    }
+    auto sign =
+        LLVM::ZExtOp::create(rewriter, loc, rewriter.getI32Type(), negative);
+    auto atomic = integerConstant(rewriter, loc, rewriter.getI32Type(),
+                                  cast<MpzType>(op.getType()).getAtomic());
+    // A magnitude of one word is passed directly.
+    if (count == 1) {
+      Value word0 = resizeInteger(rewriter, loc, magnitude, word, true);
+      auto call = runtimeCall(rewriter, op, "rcgmp_mpz_from_word", pointer,
+                              {word0, sign, atomic});
+      if (!call)
+        return failure();
+      rewriter.replaceOp(op, call.getResults());
+      return success();
+    }
     auto function = op->getParentOfType<FunctionOpInterface>();
     if (!function)
       return rewriter.notifyMatchFailure(op,
@@ -175,16 +197,6 @@ struct PromoteLowering : OpConversionPattern<MpzPromoteOp> {
       storage = LLVM::AllocaOp::create(rewriter, loc, pointer, word, size);
     }
     LLVM::LifetimeStartOp::create(rewriter, loc, storage);
-    auto zero = integerConstant(rewriter, loc, input, 0);
-    Value negative = integerConstant(rewriter, loc, rewriter.getI1Type(), 0);
-    Value magnitude = adaptor.getValue();
-    if (!op.getIsUnsigned()) {
-      negative = LLVM::ICmpOp::create(rewriter, loc, LLVM::ICmpPredicate::slt,
-                                      magnitude, zero);
-      auto negated = LLVM::SubOp::create(rewriter, loc, zero, magnitude);
-      magnitude =
-          LLVM::SelectOp::create(rewriter, loc, negative, negated, magnitude);
-    }
     for (size_t i = 0; i < count; ++i) {
       Value part = magnitude;
       if (i) {
@@ -197,10 +209,6 @@ struct PromoteLowering : OpConversionPattern<MpzPromoteOp> {
       LLVM::StoreOp::create(rewriter, loc, part, address);
     }
     auto length = integerConstant(rewriter, loc, word, count);
-    auto sign =
-        LLVM::ZExtOp::create(rewriter, loc, rewriter.getI32Type(), negative);
-    auto atomic = integerConstant(rewriter, loc, rewriter.getI32Type(),
-                                  cast<MpzType>(op.getType()).getAtomic());
     auto call = runtimeCall(rewriter, op, "rcgmp_mpz_from_words", pointer,
                             {storage, length, sign, atomic});
     if (!call)
@@ -341,17 +349,17 @@ struct FromBitsLowering : OpConversionPattern<MpzFromBitsOp> {
   }
 };
 
-// Load the heap header word or limb at Index words past the handle. A caller
+// Loads the heap header word or limb at index words past the handle. A caller
 // owns a reference, and only a unique owner mutates a heap value, so plain
-// loads suffice in both counting modes.
+// loads suffice in both counting modes. The header and limbs have native-word
+// alignment.
 Value loadWord(ConversionPatternRewriter &rewriter, Operation *op, Value handle,
-               int32_t index) {
+               LLVM::GEPArg index) {
   auto word = wordType(op);
   auto pointer = LLVM::LLVMPointerType::get(op->getContext());
   auto address = LLVM::GEPOp::create(rewriter, op->getLoc(), pointer, word,
                                      handle, ArrayRef<LLVM::GEPArg>{index},
                                      LLVM::GEPNoWrapFlags::inbounds);
-  // The heap header and limbs have native-word alignment.
   return LLVM::LoadOp::create(rewriter, op->getLoc(), word, address,
                               word.getWidth() / 8);
 }
@@ -376,11 +384,13 @@ struct LimbLowering : OpConversionPattern<MpzLimbOp> {
   LogicalResult
   matchAndRewrite(MpzLimbOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    uint64_t index = firstLimbWord + op.getIndex();
-    if (index > uint64_t(std::numeric_limits<int32_t>::max()))
-      return rewriter.notifyMatchFailure(op, "limb index is too large");
-    rewriter.replaceOp(
-        op, loadWord(rewriter, op, adaptor.getValue(), int32_t(index)));
+    Value index = adaptor.getIndex();
+    auto offset = LLVM::ConstantOp::create(
+        rewriter, op.getLoc(), index.getType(),
+        rewriter.getIntegerAttr(index.getType(), firstLimbWord));
+    Value word = LLVM::AddOp::create(rewriter, op.getLoc(), index, offset,
+                                     LLVM::IntegerOverflowFlags::nuw);
+    rewriter.replaceOp(op, loadWord(rewriter, op, adaptor.getValue(), word));
     return success();
   }
 };

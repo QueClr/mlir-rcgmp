@@ -215,8 +215,9 @@ void *rcgmp_allocate(size_t size, size_t alignment);
 void rcgmp_dealloc(void *pointer, size_t size, size_t alignment);
 ```
 
-The default implementation uses the aligned global `operator new` and
-`operator delete`. To supply an allocator, build with
+The default implementation uses `malloc` and `free`, or the aligned global
+`operator new` and `operator delete` for alignments above `max_align_t`. To
+supply an allocator, build with
 `-DRCGMP_RUNTIME_DEFAULT_ALLOCATOR=OFF` and link definitions of both functions.
 Deallocation receives the original allocation size and alignment. Allocation
 must return suitably aligned storage or null; the runtime aborts on allocation

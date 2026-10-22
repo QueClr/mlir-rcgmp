@@ -40,7 +40,9 @@ struct FastPath {
 // operation has at most 32 mpz operands. Derived may shadow:
 // - consumesOperands, false when every mpz operand is borrowed;
 // - getRuntimeResultType(op) and buildSlowResult(rewriter, loc, op, result),
-//   when the runtime result must be converted to the operation result.
+//   when the runtime result must be converted to the operation result;
+// - buildSlowPath(rewriter, loc, op, callRuntime), when the result can often
+//   be found without calling the runtime.
 template <typename Derived> struct FastPathLowering : RewritePattern {
   explicit FastPathLowering(MLIRContext *context)
       : RewritePattern(Derived::getOperationName(), 1, context) {}
@@ -58,6 +60,13 @@ template <typename Derived> struct FastPathLowering : RewritePattern {
   static Value buildSlowResult(PatternRewriter &, Location, Operation *,
                                Value result) {
     return result;
+  }
+
+  // Builds the result when the fast path is not valid, calling the runtime
+  // through callRuntime.
+  static Value buildSlowPath(PatternRewriter &rewriter, Location loc,
+                             Operation *op, function_ref<Value()> callRuntime) {
+    return Derived::buildSlowResult(rewriter, loc, op, callRuntime());
   }
 
   LogicalResult matchAndRewrite(Operation *op,
@@ -122,8 +131,10 @@ template <typename Derived> struct FastPathLowering : RewritePattern {
     SmallVector<Value> arguments(op->getOperands());
     if (passReuse)
       arguments.push_back(reuseMask(rewriter, loc, handles));
-    auto call = func::CallOp::create(rewriter, loc, function, arguments);
-    Value slow = Derived::buildSlowResult(rewriter, loc, op, call.getResult(0));
+    Value slow = Derived::buildSlowPath(rewriter, loc, op, [&] {
+      return func::CallOp::create(rewriter, loc, function, arguments)
+          .getResult(0);
+    });
     scf::YieldOp::create(rewriter, loc, slow);
     rewriter.replaceOp(op, branch.getResults());
     return success();

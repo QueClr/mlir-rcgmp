@@ -5,6 +5,7 @@ module;
 #include <compare>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 export module rcgmp.runtime:add;
 import :binary;
@@ -12,8 +13,56 @@ import :mpz;
 
 namespace rcgmp {
 
+// Adds a single limb with the given sign to a heap integer, both signs taking
+// any negation the operation applies. The heap magnitude is at least every
+// immediate one, so a nonzero result has the heap integer's sign, and
+// subtracting shortens it by at most one limb.
+template <Counting counting>
+Handle addSmall(Handle heap, bool reuse, bool negative, Limb small,
+                bool smallNegative) {
+  Mpz &value = heap.heap();
+  std::size_t count = value.count();
+  bool sameSign = negative == smallNegative;
+  Mpz &result = reuse && value.capacity >= count + sameSign
+                    ? value
+                    : allocateResult(count + sameSign);
+  const Limb *in = value.limbs().data();
+  Limb *out = result.limbs().data();
+  if (sameSign) {
+    out[count] = mpn_add_1(out, in, count, small);
+    count += out[count];
+  } else {
+    mpn_sub_1(out, in, count, small);
+    count -= out[count - 1] == 0;
+  }
+  if (&result != &value)
+    release<counting>(heap);
+  if (count <= 1)
+    if (std::optional<Handle> immediate =
+            Handle::immediate(count ? out[0] : 0, negative)) {
+      deallocate<counting>(result);
+      return *immediate;
+    }
+  result.setMagnitude(count, negative);
+  return Handle(result);
+}
+
 template <Counting counting, bool subtracting>
 Handle addOrSubtract(Handle lhs, Handle rhs, Reuse reuse) {
+  // A heap integer and a nonzero immediate, as in arithmetic with small
+  // constants.
+  if (lhs.isImmediate() != rhs.isImmediate()) {
+    bool heapIsLhs = rhs.isImmediate();
+    std::intptr_t small = (heapIsLhs ? rhs : lhs).value();
+    if (small) {
+      Handle heap = heapIsLhs ? lhs : rhs;
+      return addSmall<counting>(
+          heap, heapIsLhs ? reuse.lhs : reuse.rhs,
+          heap.heap().negative() != (subtracting && !heapIsLhs),
+          small < 0 ? -static_cast<Limb>(small) : static_cast<Limb>(small),
+          (small < 0) != (subtracting && heapIsLhs));
+    }
+  }
   Magnitude left(lhs), right(rhs);
   if (subtracting && right.count())
     right.negative = !right.negative;

@@ -72,8 +72,40 @@ std::size_t resultCount(Logic logic, const Magnitude &left,
   return std::max(left.count(), right.count()) + negative;
 }
 
+// Combines a nonnegative heap integer with an immediate that changes only its
+// least significant limb: a nonnegative one, or a negative one under AND,
+// whose higher bits are ones. AND with a nonnegative immediate leaves at most
+// its bits. Otherwise the heap integer keeps its higher bits, so its length
+// and its place outside the immediate range.
+template <Counting counting, Logic logic>
+Handle bitwiseSmall(Handle heap, bool reuse, std::intptr_t small) {
+  Mpz &value = heap.heap();
+  Limb low = apply(logic, value.limbs()[0], static_cast<Limb>(small));
+  if (logic == Logic::conjunction && small >= 0) {
+    release<counting>(heap);
+    return Handle::immediate(static_cast<std::intptr_t>(low));
+  }
+  std::size_t count = value.count();
+  Mpz &result = reuse ? value : allocateResult(count);
+  if (&result != &value) {
+    std::ranges::copy(value.magnitude(), result.limbs().begin());
+    result.setMagnitude(count, false);
+    release<counting>(heap);
+  }
+  result.limbs()[0] = low;
+  return Handle(result);
+}
+
 template <Counting counting, Logic logic>
 Handle bitwise(Handle lhs, Handle rhs, Reuse reuse) {
+  if (lhs.isImmediate() != rhs.isImmediate()) {
+    bool heapIsLhs = rhs.isImmediate();
+    Handle heap = heapIsLhs ? lhs : rhs;
+    std::intptr_t small = (heapIsLhs ? rhs : lhs).value();
+    if (!heap.heap().negative() && (small >= 0 || logic == Logic::conjunction))
+      return bitwiseSmall<counting, logic>(
+          heap, heapIsLhs ? reuse.lhs : reuse.rhs, small);
+  }
   Magnitude left(lhs), right(rhs);
   // An operand's sign is its infinite sign bit.
   bool negative = apply(logic, left.negative, right.negative);

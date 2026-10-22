@@ -7,13 +7,15 @@
 // SCF: rcgmp.bridge.mpz.from_imm
 // SCF: } else {
 // SCF: rcgmp.bridge.mpz.promote
+// A one-word input outside the immediate range passes its magnitude and sign
+// to the runtime.
 // LLVM-LABEL: llvm.func @from_signed
-// LLVM: llvm.alloca
+// LLVM-NOT: llvm.alloca
 // LLVM: llvm.icmp "sle"
 // LLVM: llvm.icmp "sge"
 // LLVM: llvm.shl
 // LLVM: llvm.inttoptr
-// LLVM: llvm.call @rcgmp_mpz_from_words
+// LLVM: llvm.call @rcgmp_mpz_from_word({{.*}}) : (i64, i32, i32) -> !llvm.ptr
 func.func @from_signed(%x: i64) -> !rcgmp.mpz {
   %r = rcgmp.from_int %x : i64 to !rcgmp.mpz
   return %r : !rcgmp.mpz
@@ -74,6 +76,10 @@ func.func @release_atomic(%x: !rcgmp.mpz<atomic>) {
   rcgmp.release %x : !rcgmp.mpz<atomic>
   return
 }
+// Wider inputs pass their magnitude words in memory.
+// LLVM-LABEL: llvm.func @from_min129
+// LLVM: llvm.alloca
+// LLVM: llvm.call @rcgmp_mpz_from_words
 func.func @from_min129() -> !rcgmp.mpz {
   %x = arith.constant -340282366920938463463374607431768211456 : i129
   %r = rcgmp.from_int %x : i129 to !rcgmp.mpz

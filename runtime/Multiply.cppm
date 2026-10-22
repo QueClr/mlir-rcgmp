@@ -40,11 +40,25 @@ Handle multiply(Handle lhs, Handle rhs, Reuse reuse) {
     out[a.count()] = carry;
   } else if (x == b.limbs.data()) {
     mpn_sqr(out.data(), x, a.count());
+  } else if (b.count() == 2) {
+    // Two rows of schoolbook multiplication avoid the size dispatch of
+    // mpn_mul for the most common multi-limb multiplier.
+    out[a.count()] = mpn_mul_1(out.data(), x, a.count(), b.limbs[0]);
+    out[a.count() + 1] = mpn_addmul_1(out.data() + 1, x, a.count(), b.limbs[1]);
   } else {
     mpn_mul(out.data(), x, a.count(), b.limbs.data(), b.count());
   }
+  // The product of nonzero magnitudes fills all its limbs but at most the
+  // most significant one, so only a one-limb product may be immediate.
+  count -= out[count - 1] == 0;
   result.setMagnitude(count, a.negative != b.negative);
-  return finish<counting>(result, lhs, rhs);
+  if (count <= 1)
+    return finish<counting>(result, lhs, rhs);
+  if (Handle(result) != lhs)
+    release<counting>(lhs);
+  if (Handle(result) != rhs)
+    release<counting>(rhs);
+  return Handle(result);
 }
 
 } // namespace rcgmp
