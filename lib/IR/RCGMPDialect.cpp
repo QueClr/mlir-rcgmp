@@ -10,6 +10,9 @@
 #define GET_TYPEDEF_CLASSES
 #include "RCGMP/IR/RCGMPTypes.cpp.inc"
 
+#define GET_ATTRDEF_CLASSES
+#include "RCGMP/IR/RCGMPAttrs.cpp.inc"
+
 #include "RCGMP/IR/RCGMPDialect.cpp.inc"
 
 namespace mlir::rcgmp {
@@ -26,6 +29,10 @@ void RCGMPDialect::initialize() {
   addTypes<
 #define GET_TYPEDEF_LIST
 #include "RCGMP/IR/RCGMPTypes.cpp.inc"
+      >();
+  addAttributes<
+#define GET_ATTRDEF_LIST
+#include "RCGMP/IR/RCGMPAttrs.cpp.inc"
       >();
 }
 

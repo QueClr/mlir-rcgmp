@@ -13,12 +13,26 @@ bool fitsImmediate(const APInt &value, unsigned handleWidth) {
          value.getSignificantBits() <= handleWidth - 2;
 }
 
-LogicalResult MpzToBitsOp::verify() {
-  auto width =
-      DataLayout::closest(*this).getTypeSizeInBits(getValue().getType());
-  if (getType().getWidth() != width.getFixedValue())
-    return emitOpError("requires an integer matching the handle bit width");
+// Checks that an operation reading the handle of value produces an integer of
+// the handle width.
+static LogicalResult verifyHandleWidth(Operation *op, Value value,
+                                       IntegerType type) {
+  auto width = DataLayout::closest(op).getTypeSizeInBits(value.getType());
+  if (type.getWidth() != width.getFixedValue())
+    return op->emitOpError("requires an integer matching the handle bit width");
   return success();
+}
+
+LogicalResult MpzToBitsOp::verify() {
+  return verifyHandleWidth(*this, getValue(), getType());
+}
+
+LogicalResult MpzSizeOp::verify() {
+  return verifyHandleWidth(*this, getValue(), getType());
+}
+
+LogicalResult MpzLimbOp::verify() {
+  return verifyHandleWidth(*this, getValue(), getType());
 }
 
 LogicalResult MpzImmortalOp::verify() {

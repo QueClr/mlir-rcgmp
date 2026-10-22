@@ -102,4 +102,26 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<!llvm.ptr, dense<
     %r = rcgmp.negi %x : !rcgmp.mpz
     return %r : !rcgmp.mpz
   }
+  // Limbs and tagged offsets follow the handle width: 2^32 + 1 has two 32-bit
+  // limbs, and the remainder of at_least 2 subtracts 8 from the tagged bits.
+  // CHECK-LABEL: llvm.func @match
+  // CHECK: llvm.mlir.constant(8 : i32)
+  // CHECK: llvm.getelementptr inbounds %{{.*}}[1] : (!llvm.ptr) -> !llvm.ptr, i32
+  // CHECK-NEXT: llvm.load %{{.*}} {alignment = 4 : i64} : !llvm.ptr -> i32
+  // CHECK: llvm.getelementptr inbounds %{{.*}}[4] : (!llvm.ptr) -> !llvm.ptr, i32
+  func.func @match(%x: !rcgmp.mpz) -> !rcgmp.mpz {
+    %r = rcgmp.match %x : !rcgmp.mpz -> !rcgmp.mpz {
+      case 4294967297 {
+        %c = rcgmp.constant 0 : !rcgmp.mpz
+        rcgmp.yield %c : !rcgmp.mpz
+      }
+      at_least 2 (%k) {
+        rcgmp.yield %k : !rcgmp.mpz
+      }
+      default (%m) {
+        rcgmp.yield %m : !rcgmp.mpz
+      }
+    }
+    return %r : !rcgmp.mpz
+  }
 }

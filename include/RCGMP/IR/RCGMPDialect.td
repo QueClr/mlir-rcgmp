@@ -14,6 +14,7 @@ def RCGMPDialect : Dialect {
     operations preserve representation details until LLVM lowering.
   }];
   let useDefaultTypePrinterParser = 1;
+  let useDefaultAttributePrinterParser = 1;
   let dependentDialects = ["::mlir::LLVM::LLVMDialect"];
 }
 

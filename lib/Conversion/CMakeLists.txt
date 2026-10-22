@@ -1,4 +1,5 @@
-set(LLVM_OPTIONAL_SOURCES ConvertRCGMPToLLVM.cpp ConvertRCGMPBridgeToLLVM.cpp ConvertRCGMPToSCF.cpp)
+set(LLVM_OPTIONAL_SOURCES ConvertRCGMPToLLVM.cpp ConvertRCGMPBridgeToLLVM.cpp
+  ConvertRCGMPToSCF.cpp MatchLowering.cpp)
 
 add_mlir_conversion_library(MLIRRCGMPToLLVM
   ConvertRCGMPToLLVM.cpp
@@ -13,7 +14,9 @@ add_mlir_conversion_library(MLIRRCGMPToLLVM
 
 add_mlir_conversion_library(MLIRRCGMPToSCF
   ConvertRCGMPToSCF.cpp
+  MatchLowering.cpp
   LINK_LIBS PUBLIC
     MLIRRCGMP MLIRArithDialect MLIRControlFlowDialect MLIRSCFDialect
-    MLIRFuncDialect MLIRPass MLIRTransformUtils
+    MLIRFuncDialect MLIRMemRefDialect MLIRUBDialect MLIRPass
+    MLIRTransformUtils
 )

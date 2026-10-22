@@ -2,8 +2,10 @@
 #define RCGMP_IR_OPS_TD
 
 // Public operations with explicit ownership semantics.
+include "RCGMP/IR/RCGMPAttrs.td"
 include "RCGMP/IR/RCGMPEnums.td"
 include "RCGMP/IR/RCGMPOpBase.td"
+include "mlir/Interfaces/ControlFlowInterfaces.td"
 
 // A consumed reference may be decremented, reused, or freed.
 defvar RCGMP_ConsumedEffects = [MemRead, MemWrite, MemFree];
@@ -183,6 +185,66 @@ def RCGMP_CmpIOp : RCGMPOp<"cmpi", [SameTypeOperands, RCGMP_NotSpeculatable]> {
       Arg<RCGMP_MpzType, "borrowed rhs", [MemRead]>:$rhs);
   let results = (outs I1:$result);
   let assemblyFormat = "$predicate `,` $lhs `,` $rhs attr-dict `:` type($lhs)";
+}
+
+def RCGMP_MatchOp : RCGMPOp<"match", [RCGMP_NotSpeculatable,
+    RecursiveMemoryEffects, SingleBlockImplicitTerminator<"YieldOp">,
+    DeclareOpInterfaceMethods<RegionBranchOpInterface, ["getSuccessorInputs"]>]> {
+  let summary = "Select a region by the value of a consumed integer";
+  let description = [{
+    Run the region of the first arm that selects the value of the scrutinee,
+    and return the values it yields. An arm is one of:
+
+    - `case k, ...`, selecting each listed integer;
+    - `at_least c`, selecting the integers at least `c`;
+    - `default`, selecting every integer. It may only be the last arm.
+
+    Arms are tested in order, so an arm may select integers that an earlier arm
+    also selects. Values of any width may be listed. If no arm selects the
+    scrutinee, the behavior is undefined.
+
+    The match consumes one owned reference to the scrutinee. An `at_least c`
+    region may take an argument, which owns one reference to the scrutinee
+    minus `c`, and a `default` region may take one owning the scrutinee. When
+    the selected region takes no argument, the match releases the scrutinee
+    itself.
+
+    ```mlir
+    %r = rcgmp.match %n : !rcgmp.mpz -> i64 {
+      case 0, 1 {
+        rcgmp.yield %one : i64
+      }
+      at_least 2 (%k) {
+        %f = func.call @f(%k) : (!rcgmp.mpz) -> i64
+        rcgmp.yield %f : i64
+      }
+    }
+    ```
+  }];
+  let arguments = (ins
+      Arg<RCGMP_MpzType, "consumed scrutinee", RCGMP_ConsumedEffects>:$scrutinee,
+      TypedArrayAttrBase<RCGMP_ArmAttr, "match arms">:$arms);
+  let results = (outs Variadic<AnyType>:$results);
+  let regions = (region VariadicRegion<SizedRegion<1>>:$bodies);
+  let hasCustomAssemblyFormat = 1;
+  let hasVerifier = 1;
+  let hasCanonicalizer = 1;
+  let extraClassDeclaration = [{
+    ArmAttr getArm(unsigned index) {
+      return ::llvm::cast<ArmAttr>(getArms()[index]);
+    }
+
+    // The integers each arm selects, after earlier arms have selected theirs.
+    SmallVector<MatchInterval> getIntervals();
+  }];
+}
+
+def RCGMP_YieldOp : RCGMPOp<"yield", [Pure, ReturnLike, Terminator,
+    HasParent<"MatchOp">]> {
+  let summary = "Return values from a match arm";
+  let arguments = (ins Variadic<AnyType>:$results);
+  let assemblyFormat = "attr-dict ($results^ `:` type($results))?";
+  let builders = [OpBuilder<(ins), [{ /* Yields no values. */ }]>];
 }
 
 #endif

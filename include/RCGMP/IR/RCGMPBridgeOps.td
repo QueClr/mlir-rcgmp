@@ -192,4 +192,35 @@ def RCGMP_MpzIsUniqueOp : RCGMPBridgeOp<"mpz.is_unique", [RCGMP_NotSpeculatable]
   let assemblyFormat = "$value attr-dict `:` type($value)";
 }
 
+def RCGMP_MpzSizeOp : RCGMPBridgeOp<"mpz.size", [RCGMP_NotSpeculatable]> {
+  let summary = "Load the signed limb count of a live heap value";
+  let description = [{
+    The operand must be a heap handle with a reference held by the caller. The
+    result is the number of magnitude limbs, negated for a negative value, and
+    its width must equal the handle width. A canonical heap value has no
+    leading zero limbs, so of two values the one with the smaller signed count
+    is smaller.
+  }];
+  let arguments = (ins Arg<RCGMP_MpzType, "heap integer", [MemRead]>:$value);
+  let results = (outs AnySignlessInteger:$result);
+  let assemblyFormat = "$value attr-dict `:` type($value) `to` type($result)";
+  let hasVerifier = 1;
+}
+
+def RCGMP_MpzLimbOp : RCGMPBridgeOp<"mpz.limb", [RCGMP_NotSpeculatable]> {
+  let summary = "Load one magnitude limb of a live heap value";
+  let description = [{
+    The operand must be a heap handle with a reference held by the caller, and
+    the index must be below its limb count. Limbs are numbered from the least
+    significant. The result width must equal the handle width.
+  }];
+  let arguments = (ins Arg<RCGMP_MpzType, "heap integer", [MemRead]>:$value,
+                       I64Attr:$index);
+  let results = (outs AnySignlessInteger:$result);
+  let assemblyFormat = [{
+    $value `[` $index `]` attr-dict `:` type($value) `to` type($result)
+  }];
+  let hasVerifier = 1;
+}
+
 #endif

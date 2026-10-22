@@ -4,6 +4,8 @@ set(RCGMP_OPT_LIBS
   MLIRRCGMPToSCF
   MLIRArithToLLVM
   MLIRSCFToControlFlow
+  MLIRUBToLLVM
+  MLIRMemRefToLLVM
   MLIRReconcileUnrealizedCasts
   MLIRTransforms
   MLIRControlFlowDialect

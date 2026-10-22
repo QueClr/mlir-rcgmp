@@ -6,6 +6,8 @@
 #include <mlir/Interfaces/FunctionInterfaces.h>
 #include <mlir/Transforms/DialectConversion.h>
 
+#include <limits>
+
 namespace mlir::rcgmp {
 namespace {
 using namespace bridge;
@@ -339,6 +341,50 @@ struct FromBitsLowering : OpConversionPattern<MpzFromBitsOp> {
   }
 };
 
+// Load the heap header word or limb at Index words past the handle. A caller
+// owns a reference, and only a unique owner mutates a heap value, so plain
+// loads suffice in both counting modes.
+Value loadWord(ConversionPatternRewriter &rewriter, Operation *op, Value handle,
+               int32_t index) {
+  auto word = wordType(op);
+  auto pointer = LLVM::LLVMPointerType::get(op->getContext());
+  auto address = LLVM::GEPOp::create(rewriter, op->getLoc(), pointer, word,
+                                     handle, ArrayRef<LLVM::GEPArg>{index},
+                                     LLVM::GEPNoWrapFlags::inbounds);
+  // The heap header and limbs have native-word alignment.
+  return LLVM::LoadOp::create(rewriter, op->getLoc(), word, address,
+                              word.getWidth() / 8);
+}
+
+// The header holds the reference count, the signed limb count, and the
+// capacity, followed by the limbs.
+constexpr int32_t sizeWord = 1, firstLimbWord = 3;
+
+struct SizeLowering : OpConversionPattern<MpzSizeOp> {
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(MpzSizeOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    rewriter.replaceOp(op,
+                       loadWord(rewriter, op, adaptor.getValue(), sizeWord));
+    return success();
+  }
+};
+
+struct LimbLowering : OpConversionPattern<MpzLimbOp> {
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(MpzLimbOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    uint64_t index = firstLimbWord + op.getIndex();
+    if (index > uint64_t(std::numeric_limits<int32_t>::max()))
+      return rewriter.notifyMatchFailure(op, "limb index is too large");
+    rewriter.replaceOp(
+        op, loadWord(rewriter, op, adaptor.getValue(), int32_t(index)));
+    return success();
+  }
+};
+
 // Compare a heap reference count with Count, loading atomic counts with
 // Ordering.
 template <typename Op, uint64_t Count, LLVM::AtomicOrdering Ordering>
@@ -378,8 +424,8 @@ void populateRCGMPBridgeToLLVMConversionPatterns(LLVMTypeConverter &converter,
       IsImmediateLowering, FitsImmediateLowering, FromImmediateLowering,
       PromoteLowering, ImmortalLowering, RefCountLowering<MpzIncRefOp, true>,
       RefCountLowering<MpzDecRefOp, false>, FreeLowering, ToBitsLowering,
-      FromBitsLowering, IsUniqueLowering, IsImmortalLowering>(
-      converter, patterns.getContext());
+      FromBitsLowering, IsUniqueLowering, IsImmortalLowering, SizeLowering,
+      LimbLowering>(converter, patterns.getContext());
 }
 
 } // namespace mlir::rcgmp

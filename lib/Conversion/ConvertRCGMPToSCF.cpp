@@ -1,12 +1,15 @@
 #include "RCGMP/Conversion/ConvertRCGMPToSCF.h"
 #include "FastPathLowering.h"
+#include "MatchLowering.h"
 #include "RCGMP/IR/RCGMPBridgeOps.h"
 #include "RCGMP/IR/RCGMPOps.h"
 
 #include <mlir/Dialect/Arith/IR/Arith.h>
 #include <mlir/Dialect/ControlFlow/IR/ControlFlowOps.h>
 #include <mlir/Dialect/Func/IR/FuncOps.h>
+#include <mlir/Dialect/MemRef/IR/MemRef.h>
 #include <mlir/Dialect/SCF/IR/SCF.h>
+#include <mlir/Dialect/UB/IR/UBOps.h>
 #include <mlir/IR/BuiltinOps.h>
 #include <mlir/Transforms/DialectConversion.h>
 
@@ -383,7 +386,8 @@ struct ConvertRCGMPToSCFPass
   }
   void getDependentDialects(DialectRegistry &registry) const override {
     registry.insert<RCGMPDialect, scf::SCFDialect, arith::ArithDialect,
-                    cf::ControlFlowDialect, func::FuncDialect>();
+                    cf::ControlFlowDialect, func::FuncDialect,
+                    memref::MemRefDialect, ub::UBDialect>();
   }
   void runOnOperation() override {
     RewritePatternSet patterns(&getContext());
@@ -391,10 +395,11 @@ struct ConvertRCGMPToSCFPass
                  ReleaseLowering, AddILowering, SubILowering, MulILowering,
                  AndILowering, XOrILowering, OrILowering, NotILowering,
                  NegILowering, AbsILowering, CmpILowering>(&getContext());
+    populateMatchLoweringPatterns(patterns);
     ConversionTarget target(getContext());
     target.addIllegalOp<ConstantOp, FromIntOp, RetainOp, ReleaseOp, AddIOp,
                         SubIOp, MulIOp, AndIOp, XOrIOp, OrIOp, NotIOp, NegIOp,
-                        AbsIOp, CmpIOp>();
+                        AbsIOp, CmpIOp, MatchOp, YieldOp>();
     target.markUnknownOpDynamicallyLegal([](Operation *) { return true; });
     if (failed(applyPartialConversion(getOperation(), target,
                                       std::move(patterns))))
