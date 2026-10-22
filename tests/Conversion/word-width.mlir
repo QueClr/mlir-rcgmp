@@ -60,11 +60,17 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<!llvm.ptr, dense<
     rcgmp.retain %x : !rcgmp.mpz<atomic>
     return %x : !rcgmp.mpz<atomic>
   }
+  // A unique value is freed without updating its count; otherwise an immortal
+  // one is skipped and a counted one decremented.
   // CHECK-LABEL: llvm.func @release
   // CHECK: %[[COUNT:.*]] = llvm.load %arg0 : !llvm.ptr -> i32
-  // CHECK: %[[ZERO:.*]] = llvm.mlir.constant(0 : i32)
-  // CHECK: llvm.icmp "eq" %[[COUNT]], %[[ZERO]]
+  // CHECK: %[[ONE:.*]] = llvm.mlir.constant(1 : i32)
+  // CHECK: llvm.icmp "eq" %[[COUNT]], %[[ONE]]
   // CHECK: llvm.cond_br
+  // CHECK: llvm.call @rcgmp_mpz_free
+  // CHECK: %[[AGAIN:.*]] = llvm.load %arg0 : !llvm.ptr -> i32
+  // CHECK: %[[ZERO:.*]] = llvm.mlir.constant(0 : i32)
+  // CHECK: llvm.icmp "eq" %[[AGAIN]], %[[ZERO]]
   // CHECK: llvm.sub {{.*}} : i32
   func.func @release(%x: !rcgmp.mpz) {
     rcgmp.release %x : !rcgmp.mpz
@@ -108,7 +114,7 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<!llvm.ptr, dense<
   // CHECK: llvm.mlir.constant(8 : i32)
   // CHECK: llvm.getelementptr inbounds %{{.*}}[1] : (!llvm.ptr) -> !llvm.ptr, i32
   // CHECK-NEXT: llvm.load %{{.*}} {alignment = 4 : i64} : !llvm.ptr -> i32
-  // CHECK: llvm.getelementptr inbounds %{{.*}}[4] : (!llvm.ptr) -> !llvm.ptr, i32
+  // CHECK: llvm.getelementptr inbounds %{{.*}}[%{{.*}}] : (!llvm.ptr, i16) -> !llvm.ptr, i32
   func.func @match(%x: !rcgmp.mpz) -> !rcgmp.mpz {
     %r = rcgmp.match %x : !rcgmp.mpz -> !rcgmp.mpz {
       case 4294967297 {

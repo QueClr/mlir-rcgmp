@@ -16,6 +16,9 @@ extern "C" {
 // negative and atomic must be 0 or 1. The result owns one reference.
 void *rcgmp_mpz_from_words(const uintptr_t *words, size_t count,
                            uint32_t negative, uint32_t atomic);
+// The same for a magnitude of one word.
+void *rcgmp_mpz_from_word(uintptr_t magnitude, uint32_t negative,
+                          uint32_t atomic);
 // Heap objects with a zero reference count are immortal: retain and release
 // leave them unchanged, and they are never reused in place.
 void *rcgmp_mpz_retain(void *value, uint32_t atomic);

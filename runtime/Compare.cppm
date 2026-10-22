@@ -14,6 +14,16 @@ namespace rcgmp {
 export std::strong_ordering compare(Handle lhs, Handle rhs) {
   if (lhs.isImmediate() && rhs.isImmediate())
     return lhs.value() <=> rhs.value();
+  // Signed limb counts order heap integers of different lengths and signs, and
+  // equal ones share a sign.
+  if (!lhs.isImmediate() && !rhs.isImmediate()) {
+    Mpz &left = lhs.heap(), &right = rhs.heap();
+    if (left.size != right.size)
+      return left.size <=> right.size;
+    std::strong_ordering order =
+        mpn_cmp(left.limbs().data(), right.limbs().data(), left.count()) <=> 0;
+    return left.negative() ? 0 <=> order : order;
+  }
   Magnitude left(lhs), right(rhs);
   if (left.negative != right.negative)
     return left.negative ? std::strong_ordering::less

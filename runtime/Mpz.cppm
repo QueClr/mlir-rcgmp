@@ -144,9 +144,24 @@ export template <Counting counting> void retain(Handle value) {
 }
 
 export template <Counting counting> void release(Handle value) {
-  if (value.isImmediate() || isImmortal<counting>(value.heap()))
+  if (value.isImmediate())
     return;
+  // The only reference is released without updating the count, which no
+  // other owner can observe. The acquire load orders the accesses of earlier
+  // owners before the deallocation.
   std::uintptr_t &references = value.heap().references;
+  std::uintptr_t count;
+  if constexpr (counting == Counting::atomic)
+    count = std::atomic_ref<std::uintptr_t>(references)
+                .load(std::memory_order::acquire);
+  else
+    count = references;
+  if (count == 1) {
+    deallocate<counting>(value.heap());
+    return;
+  }
+  if (count == 0)
+    return;
   std::uintptr_t old;
   if constexpr (counting == Counting::atomic)
     old = std::atomic_ref<std::uintptr_t>(references)
@@ -209,6 +224,18 @@ void *rcgmp_mpz_from_words(const std::uintptr_t *words, std::size_t count,
                            std::uint32_t negative, std::uint32_t) {
   // A new integer has no other owner, so its counting needs no atomicity.
   return rcgmp::fromWords({words, count}, negative).pointer();
+}
+
+void *rcgmp_mpz_from_word(std::uintptr_t magnitude, std::uint32_t negative,
+                          std::uint32_t) {
+  if (std::optional<rcgmp::Handle> small =
+          rcgmp::Handle::immediate(magnitude, negative))
+    return small->pointer();
+  // One spare limb, as fromWords leaves.
+  rcgmp::Mpz &value = rcgmp::allocate(2);
+  value.limbs()[0] = magnitude;
+  value.setMagnitude(1, negative);
+  return rcgmp::Handle(value).pointer();
 }
 
 void *rcgmp_mpz_retain(void *value, std::uint32_t atomic) {

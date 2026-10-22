@@ -5,6 +5,7 @@ module;
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 export module rcgmp.runtime:unary;
 import :binary;
@@ -29,22 +30,34 @@ template <Counting counting> Handle finish(Mpz &result, Handle value) {
 // Consumes an operand and returns its magnitude with the given sign.
 template <Counting counting>
 Handle withSign(Handle value, bool reuse, bool negative) {
-  Magnitude magnitude(value);
-  if (value.isImmediate())
+  if (value.isImmediate()) {
+    Magnitude magnitude(value);
     return fromWords(magnitude.limbs, negative);
-  if (magnitude.negative == negative)
+  }
+  Mpz &heap = value.heap();
+  if (heap.negative() == negative)
     return value; // The consumed reference becomes the result's.
-  std::size_t count = magnitude.count();
-  Mpz &result = destination(value, reuse, count);
-  if (Handle(result) != value)
-    std::ranges::copy(magnitude.limbs, result.limbs().begin());
-  result.setMagnitude(count, negative);
+  std::size_t count = heap.count();
   // Negating 2^(W-3) yields the immediate minimum.
-  return finish<counting>(result, value);
+  if (negative && count == 1)
+    if (std::optional<Handle> small =
+            Handle::immediate(heap.limbs()[0], true)) {
+      release<counting>(value);
+      return *small;
+    }
+  Mpz &result = reuse ? heap : allocateResult(count);
+  if (&result != &heap) {
+    std::ranges::copy(heap.magnitude(), result.limbs().begin());
+    release<counting>(value);
+  }
+  result.setMagnitude(count, negative);
+  return Handle(result);
 }
 
 export template <Counting counting> Handle negate(Handle value, bool reuse) {
-  return withSign<counting>(value, reuse, !Magnitude(value).negative);
+  bool negative =
+      value.isImmediate() ? value.value() > 0 : !value.heap().negative();
+  return withSign<counting>(value, reuse, negative);
 }
 
 export template <Counting counting> Handle absolute(Handle value, bool reuse) {

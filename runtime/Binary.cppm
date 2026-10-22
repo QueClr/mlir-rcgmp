@@ -51,6 +51,12 @@ private:
   Limb small;
 };
 
+// A new integer for a result of up to required limbs. Geometric headroom
+// amortizes repeated growth. Allocation rejects the saturated capacity.
+inline Mpz &allocateResult(std::size_t required) {
+  return allocate(std::add_sat(required, required / 2 + 1));
+}
+
 // Returns storage for a result of up to required limbs: a reusable operand with
 // enough capacity, or else a new integer.
 inline Mpz &destination(Handle lhs, Handle rhs, Reuse reuse,
@@ -59,9 +65,7 @@ inline Mpz &destination(Handle lhs, Handle rhs, Reuse reuse,
     return lhs.heap();
   if (reuse.rhs && rhs.heap().capacity >= required)
     return rhs.heap();
-  // Geometric headroom amortizes repeated growth. Allocation rejects the
-  // saturated capacity.
-  return allocate(std::add_sat(required, required / 2 + 1));
+  return allocateResult(required);
 }
 
 // Consumes both operands of a result that needs no storage of its own.

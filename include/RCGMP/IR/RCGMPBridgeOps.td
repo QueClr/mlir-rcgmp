@@ -215,7 +215,7 @@ def RCGMP_MpzLimbOp : RCGMPBridgeOp<"mpz.limb", [RCGMP_NotSpeculatable]> {
     significant. The result width must equal the handle width.
   }];
   let arguments = (ins Arg<RCGMP_MpzType, "heap integer", [MemRead]>:$value,
-                       I64Attr:$index);
+                       Index:$index);
   let results = (outs AnySignlessInteger:$result);
   let assemblyFormat = [{
     $value `[` $index `]` attr-dict `:` type($value) `to` type($result)

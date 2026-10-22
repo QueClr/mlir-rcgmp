@@ -15,10 +15,25 @@
 // SCF: scf.if %{{.*}} -> (i1) {
 // SCF-NEXT: scf.yield %[[FAST]] : i1
 // SCF-NEXT: } else {
+// Signed limb counts, zero for an immediate, order integers unless equal.
+// SCF: %[[XCOUNT:.*]] = scf.if %{{.*}} -> (i64)
+// SCF: rcgmp.bridge.mpz.size %[[X]]
+// SCF: %[[YCOUNT:.*]] = scf.if %{{.*}} -> (i64)
+// SCF: rcgmp.bridge.mpz.size %[[Y]]
+// SCF: %[[EQUAL:.*]] = arith.cmpi eq, %[[XCOUNT]], %[[YCOUNT]]
+// SCF: scf.if %[[EQUAL]] -> (i1) {
+// Then the most significant limbs order magnitudes unless equal.
+// SCF: %[[XTOP:.*]] = rcgmp.bridge.mpz.limb %[[X]][%[[TOP:.*]]]
+// SCF: %[[YTOP:.*]] = rcgmp.bridge.mpz.limb %[[Y]][%[[TOP]]]
+// SCF: %[[DIFFER:.*]] = arith.cmpi ne, %[[XTOP]], %[[YTOP]]
+// SCF: scf.if %[[DIFFER]] -> (i1) {
+// SCF: } else {
 // SCF-NEXT: %[[ORDER:.*]] = func.call @rcgmp_mpz_cmp(%[[X]], %[[Y]])
 // SCF-NEXT: %[[ZERO:.*]] = arith.constant 0 : i32
 // SCF-NEXT: %[[SLOW:.*]] = arith.cmpi slt, %[[ORDER]], %[[ZERO]] : i32
 // SCF-NEXT: scf.yield %[[SLOW]] : i1
+// SCF: } else {
+// SCF-NEXT: arith.cmpi slt, %[[XCOUNT]], %[[YCOUNT]] : i64
 // LLVM-LABEL: llvm.func @cmpi_sge_atomic
 // LLVM: llvm.icmp "sge"
 // LLVM-NOT: atomic

@@ -89,16 +89,31 @@ struct RetainLowering : OpRewritePattern<RetainOp> {
   }
 };
 
+// The only reference to a heap value is released by freeing it, without
+// updating its count: no other owner can observe the count, and the
+// uniqueness test's acquire load orders the accesses of earlier owners before
+// the free. Other heap values are released as counted.
 struct ReleaseLowering : OpRewritePattern<ReleaseOp> {
   using OpRewritePattern::OpRewritePattern;
   LogicalResult matchAndRewrite(ReleaseOp op,
                                 PatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
-    enterCountedBranch(rewriter, loc, op.getValue());
-    auto last = bridge::MpzDecRefOp::create(rewriter, loc, op.getValue());
+    Value value = op.getValue();
+    auto immediate = bridge::MpzIsImmediateOp::create(rewriter, loc, value);
+    auto heap = scf::IfOp::create(rewriter, loc, immediate, true);
+    rewriter.setInsertionPointToStart(&heap.getElseRegion().front());
+    auto unique = bridge::MpzIsUniqueOp::create(rewriter, loc, value);
+    auto shared = scf::IfOp::create(rewriter, loc, unique, true);
+    rewriter.setInsertionPointToStart(&shared.getThenRegion().front());
+    bridge::MpzFreeOp::create(rewriter, loc, value);
+    rewriter.setInsertionPointToStart(&shared.getElseRegion().front());
+    auto immortal = bridge::MpzIsImmortalOp::create(rewriter, loc, value);
+    auto counted = scf::IfOp::create(rewriter, loc, immortal, true);
+    rewriter.setInsertionPointToStart(&counted.getElseRegion().front());
+    auto last = bridge::MpzDecRefOp::create(rewriter, loc, value);
     auto destroy = scf::IfOp::create(rewriter, loc, last, false);
     rewriter.setInsertionPointToStart(&destroy.getThenRegion().front());
-    bridge::MpzFreeOp::create(rewriter, loc, op.getValue());
+    bridge::MpzFreeOp::create(rewriter, loc, value);
     rewriter.eraseOp(op);
     return success();
   }
@@ -345,6 +360,96 @@ struct CmpILowering : FastPathLowering<CmpILowering> {
                                Operation *op, Value order) {
     auto zero = arith::ConstantIntOp::create(rewriter, loc, 0, 32);
     return arith::CmpIOp::create(rewriter, loc, getPredicate(op), order, zero);
+  }
+
+  // Signed limb counts order integers, an immediate lying between the
+  // negative and the positive heap integers as count zero. Heap integers of
+  // equal count share a sign, and their most significant limbs usually differ,
+  // ordering their magnitudes; otherwise the runtime compares them.
+  static Value buildSlowPath(PatternRewriter &rewriter, Location loc,
+                             Operation *op, function_ref<Value()> callRuntime) {
+    auto compare = cast<CmpIOp>(op);
+    unsigned width = DataLayout::closest(op)
+                         .getTypeSizeInBits(compare.getLhs().getType())
+                         .getFixedValue();
+    auto word = rewriter.getIntegerType(width);
+    auto count = [&](Value value) -> Value {
+      auto immediate = bridge::MpzIsImmediateOp::create(rewriter, loc, value);
+      auto branch = scf::IfOp::create(rewriter, loc, TypeRange{word}, immediate,
+                                      /*withElseRegion=*/true);
+      OpBuilder::InsertionGuard guard(rewriter);
+      rewriter.setInsertionPointToStart(&branch.getThenRegion().front());
+      scf::YieldOp::create(
+          rewriter, loc,
+          ValueRange{arith::ConstantIntOp::create(rewriter, loc, 0, width)});
+      rewriter.setInsertionPointToStart(&branch.getElseRegion().front());
+      scf::YieldOp::create(
+          rewriter, loc,
+          ValueRange{bridge::MpzSizeOp::create(rewriter, loc, word, value)});
+      return branch.getResult(0);
+    };
+    Value lhs = count(compare.getLhs()), rhs = count(compare.getRhs());
+    auto equal = arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::eq,
+                                       lhs, rhs);
+    auto branch =
+        scf::IfOp::create(rewriter, loc, TypeRange{rewriter.getI1Type()}, equal,
+                          /*withElseRegion=*/true);
+    OpBuilder::InsertionGuard guard(rewriter);
+    rewriter.setInsertionPointToStart(&branch.getThenRegion().front());
+    scf::YieldOp::create(
+        rewriter, loc,
+        ValueRange{compareTopLimbs(rewriter, loc, op, lhs, callRuntime)});
+    rewriter.setInsertionPointToStart(&branch.getElseRegion().front());
+    scf::YieldOp::create(rewriter, loc,
+                         ValueRange{arith::CmpIOp::create(
+                             rewriter, loc, getPredicate(op), lhs, rhs)});
+    return branch.getResult(0);
+  }
+
+  // Compares heap integers of the signed limb count count.
+  static Value compareTopLimbs(PatternRewriter &rewriter, Location loc,
+                               Operation *op, Value count,
+                               function_ref<Value()> callRuntime) {
+    auto compare = cast<CmpIOp>(op);
+    auto word = cast<IntegerType>(count.getType());
+    unsigned width = word.getWidth();
+    auto zero = arith::ConstantIntOp::create(rewriter, loc, 0, width);
+    auto negative = arith::CmpIOp::create(
+        rewriter, loc, arith::CmpIPredicate::slt, count, zero);
+    auto negated = arith::SubIOp::create(rewriter, loc, zero, count);
+    auto magnitude =
+        arith::SelectOp::create(rewriter, loc, negative, negated, count);
+    auto one = arith::ConstantIntOp::create(rewriter, loc, 1, width);
+    Value top = arith::IndexCastUIOp::create(
+        rewriter, loc, rewriter.getIndexType(),
+        arith::SubIOp::create(rewriter, loc, magnitude, one));
+    Value lhs =
+        bridge::MpzLimbOp::create(rewriter, loc, word, compare.getLhs(), top);
+    Value rhs =
+        bridge::MpzLimbOp::create(rewriter, loc, word, compare.getRhs(), top);
+    auto differ = arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::ne,
+                                        lhs, rhs);
+    auto branch = scf::IfOp::create(rewriter, loc,
+                                    TypeRange{rewriter.getI1Type()}, differ,
+                                    /*withElseRegion=*/true);
+    OpBuilder::InsertionGuard guard(rewriter);
+    rewriter.setInsertionPointToStart(&branch.getThenRegion().front());
+    // The larger limb makes the larger magnitude, which is the smaller
+    // integer when negative.
+    auto above = arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::ugt,
+                                       lhs, rhs);
+    auto greater = arith::XOrIOp::create(rewriter, loc, above, negative);
+    Value order = arith::SelectOp::create(
+        rewriter, loc, greater,
+        arith::ConstantIntOp::create(rewriter, loc, 1, 32),
+        arith::ConstantIntOp::create(rewriter, loc, -1, 32));
+    scf::YieldOp::create(rewriter, loc,
+                         ValueRange{buildSlowResult(rewriter, loc, op, order)});
+    rewriter.setInsertionPointToStart(&branch.getElseRegion().front());
+    scf::YieldOp::create(
+        rewriter, loc,
+        ValueRange{buildSlowResult(rewriter, loc, op, callRuntime())});
+    return branch.getResult(0);
   }
 
   static FastPath buildFastPath(PatternRewriter &rewriter, Location loc,
