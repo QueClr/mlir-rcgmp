@@ -76,7 +76,8 @@ rcgmp_gtest(rcgmp-gmp-link)
 find_program(RCGMP_MLIR_TRANSLATE NAMES mlir-translate
              HINTS ${LLVM_TOOLS_BINARY_DIR} REQUIRED)
 find_program(RCGMP_CLANG NAMES clang HINTS ${LLVM_TOOLS_BINARY_DIR} REQUIRED)
-function(rcgmp_native_test name)
+# Lowers runtime/<name>.mlir to an object file and sets object to its path.
+function(rcgmp_lower_mlir name object)
   set(base ${CMAKE_CURRENT_BINARY_DIR}/${name})
   add_custom_command(OUTPUT ${base}.o
     COMMAND $<TARGET_FILE:rcgmp-opt> ${CMAKE_CURRENT_SOURCE_DIR}/runtime/${name}.mlir
@@ -85,7 +86,12 @@ function(rcgmp_native_test name)
     COMMAND ${RCGMP_MLIR_TRANSLATE} --mlir-to-llvmir ${base}.mlir -o ${base}.ll
     COMMAND ${RCGMP_CLANG} -O2 -Wno-unused-command-line-argument -Wno-override-module -c ${base}.ll -o ${base}.o
     DEPENDS rcgmp-opt runtime/${name}.mlir VERBATIM)
-  add_executable(rcgmp-${name} runtime/${name}.cpp ${base}.o)
+  set(${object} ${base}.o PARENT_SCOPE)
+endfunction()
+
+function(rcgmp_native_test name)
+  rcgmp_lower_mlir(${name} object)
+  add_executable(rcgmp-${name} runtime/${name}.cpp ${object})
   target_compile_definitions(rcgmp-${name} PRIVATE RCGMP_TEST_ALLOCATOR)
   target_link_libraries(rcgmp-${name} PRIVATE RCGMPTestAllocator RCGMPTesting)
   rcgmp_gtest(rcgmp-${name})
@@ -104,9 +110,22 @@ rcgmp_native_test(binary)
 rcgmp_native_test(signed-overflow)
 rcgmp_native_test(constant)
 rcgmp_native_test(compare)
-rcgmp_native_test(differential)
-# The differential harness also exercises the comparisons in compare.mlir.
-target_sources(rcgmp-differential PRIVATE
-  ${CMAKE_CURRENT_BINARY_DIR}/compare.o)
+
+# The differential harness compares each feature, compiled from its own MLIR
+# source, with GMP. It also exercises the comparisons in compare.mlir.
+add_executable(rcgmp-differential
+  runtime/differential/binary.cpp runtime/differential/chain.cpp
+  runtime/differential/compare.cpp runtime/differential/construction.cpp
+  runtime/differential/counting.cpp ${CMAKE_CURRENT_BINARY_DIR}/compare.o)
+target_sources(rcgmp-differential PRIVATE FILE_SET CXX_MODULES FILES
+  runtime/differential/Differential.cppm)
+foreach(name binary constant counting from-int)
+  rcgmp_lower_mlir(differential/${name} object)
+  target_sources(rcgmp-differential PRIVATE ${object})
+endforeach()
+target_link_libraries(rcgmp-differential PRIVATE RCGMPTestAllocator
+  RCGMPTesting)
+rcgmp_gtest(rcgmp-differential)
+
 find_package(Threads REQUIRED)
 target_link_libraries(rcgmp-addition PRIVATE Threads::Threads)
