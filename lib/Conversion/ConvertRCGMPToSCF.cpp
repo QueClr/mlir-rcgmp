@@ -1,5 +1,5 @@
 #include "RCGMP/Conversion/ConvertRCGMPToSCF.h"
-#include "BinaryLowering.h"
+#include "FastPathLowering.h"
 #include "RCGMP/IR/RCGMPBridgeOps.h"
 #include "RCGMP/IR/RCGMPOps.h"
 
@@ -101,16 +101,17 @@ struct ReleaseLowering : OpRewritePattern<ReleaseOp> {
   }
 };
 
-struct AddILowering : BinaryLowering<AddILowering> {
-  using BinaryLowering::BinaryLowering;
+struct AddILowering : FastPathLowering<AddILowering> {
+  using FastPathLowering::FastPathLowering;
   using Op = AddIOp;
 
   static StringRef getRuntimeName(bool atomic) {
     return atomic ? "rcgmp_mpz_add_atomic" : "rcgmp_mpz_add";
   }
 
-  static BinaryFastPath buildFastPath(PatternRewriter &rewriter, Location loc,
-                                      Value lhs, Value rhs) {
+  static FastPath buildFastPath(PatternRewriter &rewriter, Location loc,
+                                Operation *, ValueRange operands) {
+    Value lhs = operands[0], rhs = operands[1];
     unsigned width = cast<IntegerType>(lhs.getType()).getWidth();
     auto checked = bridge::AddSIExtendedOp::create(
         rewriter, loc, lhs.getType(), rewriter.getI1Type(), lhs, rhs);
@@ -130,22 +131,23 @@ struct AddILowering : BinaryLowering<AddILowering> {
   }
 };
 
-struct SubILowering : BinaryLowering<SubILowering> {
-  using BinaryLowering::BinaryLowering;
+struct SubILowering : FastPathLowering<SubILowering> {
+  using FastPathLowering::FastPathLowering;
   using Op = SubIOp;
 
   static StringRef getRuntimeName(bool atomic) {
     return atomic ? "rcgmp_mpz_sub_atomic" : "rcgmp_mpz_sub";
   }
 
-  static BinaryFastPath buildFastPath(PatternRewriter &rewriter, Location loc,
-                                      Value lhs, Value rhs) {
+  static FastPath buildFastPath(PatternRewriter &rewriter, Location loc,
+                                Operation *, ValueRange operands) {
+    Value lhs = operands[0], rhs = operands[1];
     auto checked = bridge::SubSIExtendedOp::create(
         rewriter, loc, lhs.getType(), rewriter.getI1Type(), lhs, rhs);
     auto yes = arith::ConstantIntOp::create(rewriter, loc, 1, 1);
     auto fits =
         arith::XOrIOp::create(rewriter, loc, checked.getOverflow(), yes);
-    auto both = bothImmediate(rewriter, loc, lhs, rhs);
+    auto both = allImmediate(rewriter, loc, {lhs, rhs});
     auto valid = arith::AndIOp::create(rewriter, loc, fits, both);
     auto one = arith::ConstantIntOp::create(
         rewriter, loc, 1, cast<IntegerType>(lhs.getType()).getWidth());
@@ -155,16 +157,17 @@ struct SubILowering : BinaryLowering<SubILowering> {
   }
 };
 
-struct MulILowering : BinaryLowering<MulILowering> {
-  using BinaryLowering::BinaryLowering;
+struct MulILowering : FastPathLowering<MulILowering> {
+  using FastPathLowering::FastPathLowering;
   using Op = MulIOp;
 
   static StringRef getRuntimeName(bool atomic) {
     return atomic ? "rcgmp_mpz_mul_atomic" : "rcgmp_mpz_mul";
   }
 
-  static BinaryFastPath buildFastPath(PatternRewriter &rewriter, Location loc,
-                                      Value lhs, Value rhs) {
+  static FastPath buildFastPath(PatternRewriter &rewriter, Location loc,
+                                Operation *, ValueRange operands) {
+    Value lhs = operands[0], rhs = operands[1];
     unsigned width = cast<IntegerType>(lhs.getType()).getWidth();
     auto two = arith::ConstantIntOp::create(rewriter, loc, 2, width);
     auto mask = arith::ConstantIntOp::create(rewriter, loc, -4, width);
@@ -177,7 +180,7 @@ struct MulILowering : BinaryLowering<MulILowering> {
     auto yes = arith::ConstantIntOp::create(rewriter, loc, 1, 1);
     auto fits =
         arith::XOrIOp::create(rewriter, loc, product.getOverflow(), yes);
-    auto both = bothImmediate(rewriter, loc, lhs, rhs);
+    auto both = allImmediate(rewriter, loc, {lhs, rhs});
     auto valid = arith::AndIOp::create(rewriter, loc, fits, both);
     auto one = arith::ConstantIntOp::create(rewriter, loc, 1, width);
     auto tagged =
@@ -186,36 +189,38 @@ struct MulILowering : BinaryLowering<MulILowering> {
   }
 };
 
-struct AndILowering : BinaryLowering<AndILowering> {
-  using BinaryLowering::BinaryLowering;
+struct AndILowering : FastPathLowering<AndILowering> {
+  using FastPathLowering::FastPathLowering;
   using Op = AndIOp;
 
   static StringRef getRuntimeName(bool atomic) {
     return atomic ? "rcgmp_mpz_and_atomic" : "rcgmp_mpz_and";
   }
 
-  static BinaryFastPath buildFastPath(PatternRewriter &rewriter, Location loc,
-                                      Value lhs, Value rhs) {
+  static FastPath buildFastPath(PatternRewriter &rewriter, Location loc,
+                                Operation *, ValueRange operands) {
+    Value lhs = operands[0], rhs = operands[1];
     auto bits = arith::AndIOp::create(rewriter, loc, lhs, rhs);
-    return {bits, bothImmediate(rewriter, loc, lhs, rhs)};
+    return {bits, allImmediate(rewriter, loc, {lhs, rhs})};
   }
 };
 
-struct XOrILowering : BinaryLowering<XOrILowering> {
-  using BinaryLowering::BinaryLowering;
+struct XOrILowering : FastPathLowering<XOrILowering> {
+  using FastPathLowering::FastPathLowering;
   using Op = XOrIOp;
 
   static StringRef getRuntimeName(bool atomic) {
     return atomic ? "rcgmp_mpz_xor_atomic" : "rcgmp_mpz_xor";
   }
 
-  static BinaryFastPath buildFastPath(PatternRewriter &rewriter, Location loc,
-                                      Value lhs, Value rhs) {
+  static FastPath buildFastPath(PatternRewriter &rewriter, Location loc,
+                                Operation *, ValueRange operands) {
+    Value lhs = operands[0], rhs = operands[1];
     auto bits = arith::XOrIOp::create(rewriter, loc, lhs, rhs);
     auto one = arith::ConstantIntOp::create(
         rewriter, loc, 1, cast<IntegerType>(lhs.getType()).getWidth());
     auto tagged = arith::OrIOp::create(rewriter, loc, bits, one);
-    return {tagged, bothImmediate(rewriter, loc, lhs, rhs)};
+    return {tagged, allImmediate(rewriter, loc, {lhs, rhs})};
   }
 };
 

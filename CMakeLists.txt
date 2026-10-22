@@ -27,6 +27,10 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include
 add_subdirectory(include)
 add_subdirectory(lib)
 add_subdirectory(runtime)
+if(RCGMP_ENABLE_TESTS)
+  # rcgmp-test-opt links the test passes, so define them first.
+  add_subdirectory(tests/lib)
+endif()
 add_subdirectory(tool)
 
 if(RCGMP_ENABLE_TESTS)

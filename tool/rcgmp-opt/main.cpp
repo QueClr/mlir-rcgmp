@@ -19,6 +19,12 @@
 #include <mlir/Tools/mlir-opt/MlirOptMain.h>
 #include <mlir/Transforms/Passes.h>
 
+#ifdef RCGMP_INCLUDE_TESTS
+namespace mlir::rcgmp::test {
+void registerTestPasses();
+} // namespace mlir::rcgmp::test
+#endif
+
 int main(int argc, char **argv) {
   mlir::DialectRegistry registry;
   registry.insert<mlir::rcgmp::RCGMPDialect, mlir::func::FuncDialect,
@@ -35,6 +41,9 @@ int main(int argc, char **argv) {
   mlir::registerPass([] { return mlir::createCanonicalizerPass(); });
   mlir::registerPass([] { return mlir::createCSEPass(); });
   mlir::registerPass([] { return mlir::createConvertToLLVMPass(); });
+#ifdef RCGMP_INCLUDE_TESTS
+  mlir::rcgmp::test::registerTestPasses();
+#endif
   return mlir::failed(
       mlir::MlirOptMain(argc, argv, "rcgmp optimization driver\n", registry));
 }

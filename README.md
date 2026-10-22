@@ -91,14 +91,17 @@ if needed. Use `-DGMP_ROOT=/path/to/gmp` for a custom GMP prefix, or set
   with generic integer primitives and separate `mpz.*` representation primitives
   in `mlir::rcgmp::bridge`.
 - `lib/Conversion/ConvertRCGMPToSCF.cpp`: public operations to SCF and bridges.
-- `lib/Conversion/BinaryLowering.h`: shared binary-operation lowering, including
-  runtime declarations, fast/slow branching, and operand reuse checks.
+- `lib/Conversion/FastPathLowering.h`: shared lowering for operations with an
+  inline fast path and a runtime fallback, including runtime declarations,
+  fast/slow branching, and operand reuse checks.
 - `lib/Conversion/ConvertRCGMPBridgeToLLVM.cpp`: bridges to LLVM instructions
   and runtime calls.
 - `lib/Conversion/ConvertRCGMPToLLVM.cpp`: type conversion and registration.
 - `runtime`: C++ modules implementing the C ABI in `RCGMP/Runtime`, linked as
   `RCGMP::Runtime`.
 - `tests`: IR checks and native tests compiled through the complete lowering.
+  Test passes in `tests/lib` are registered in `rcgmp-test-opt`, a variant of
+  `rcgmp-opt` that is built only for the tests and not installed.
 
 ## Lowering and representation
 
@@ -173,7 +176,7 @@ immediates; XOR restores the low tag bit afterward. Neither bitwise operation
 can overflow the immediate range when both operands are immediate.
 
 The slow branch checks heap uniqueness with `rcgmp.bridge.mpz.is_unique`, then
-packs reuse permissions with `arith` and makes an ordinary `func.call` to
+packs the reuse flags with `arith` and makes an ordinary `func.call` to
 `rcgmp_mpz_add` or `rcgmp_mpz_add_atomic`. Separate entry points preserve the
 source types; both use the same implementation. Atomic uniqueness uses an
 acquire load. The runtime checks capacity and reuses either unique operand
@@ -194,6 +197,13 @@ operations use `mpn_and_n`/`mpn_xor_n` for nonnegative operands. Negative operan
 are converted a limb at a time to and from two's complement, allowing either
 unique input to be reused without temporary operand allocations. Each operation
 has separate atomic and nonatomic runtime entry points.
+
+Each runtime entry point receives the operation's operands in order. When an
+operation consumes its mpz operands and produces an mpz, its entry points also
+receive the reuse flags as a final unsigned `i32`, whose bit i permits reusing
+the storage of the i-th mpz operand, so such an operation has at most 32 mpz
+operands. Entry points of operations that borrow their operands or produce a
+fixed-width integer receive no reuse flags.
 
 ## Custom allocation
 
