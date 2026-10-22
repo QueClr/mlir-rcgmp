@@ -340,6 +340,98 @@ struct AbsILowering : FastPathLowering<AbsILowering> {
   }
 };
 
+// Shift amounts are unsigned. One wider than the handle saturates, which no
+// shift can tell apart: no integer has that many bits to shift right, and
+// shifting a nonzero integer left that far cannot be allocated.
+Value saturatingWord(PatternRewriter &rewriter, Location loc, Value amount,
+                     IntegerType word) {
+  auto type = cast<IntegerType>(amount.getType());
+  if (type.getWidth() < word.getWidth())
+    return arith::ExtUIOp::create(rewriter, loc, word, amount);
+  if (type.getWidth() > word.getWidth()) {
+    auto maximum = arith::ConstantOp::create(
+        rewriter, loc,
+        rewriter.getIntegerAttr(
+            type, APInt::getLowBitsSet(type.getWidth(), word.getWidth())));
+    amount = arith::MinUIOp::create(rewriter, loc, amount, maximum);
+    return arith::TruncIOp::create(rewriter, loc, word, amount);
+  }
+  return amount;
+}
+
+// The shift amount clamped to the handle width minus one, which the shift
+// instructions accept.
+Value clampedShift(PatternRewriter &rewriter, Location loc, Value amount) {
+  unsigned width = cast<IntegerType>(amount.getType()).getWidth();
+  auto limit = arith::ConstantIntOp::create(rewriter, loc, width - 1, width);
+  return arith::MinUIOp::create(rewriter, loc, amount, limit);
+}
+
+struct ShLILowering : FastPathLowering<ShLILowering> {
+  using FastPathLowering::FastPathLowering;
+  using Op = ShLIOp;
+
+  static StringRef getRuntimeName(bool atomic) {
+    return atomic ? "rcgmp_mpz_shl_atomic" : "rcgmp_mpz_shl";
+  }
+
+  static Value buildRuntimeOperand(PatternRewriter &rewriter, Location loc,
+                                   Value amount, IntegerType word) {
+    return saturatingWord(rewriter, loc, amount, word);
+  }
+
+  static FastPath buildFastPath(PatternRewriter &rewriter, Location loc,
+                                Operation *, ValueRange operands) {
+    Value bits = operands[0], amount = operands[1];
+    unsigned width = cast<IntegerType>(bits.getType()).getWidth();
+    auto one = arith::ConstantIntOp::create(rewriter, loc, 1, width);
+    // 4*x shifted left keeps every bit, the sign included, exactly when x
+    // shifted left is immediate, and then shifting back recovers it. Clamping
+    // the amount keeps only zero, whose shift is zero for any amount.
+    auto scaled = arith::XOrIOp::create(rewriter, loc, bits, one);
+    Value shift = clampedShift(rewriter, loc, amount);
+    auto shifted = arith::ShLIOp::create(rewriter, loc, scaled, shift);
+    auto back = arith::ShRSIOp::create(rewriter, loc, shifted, shift);
+    auto kept = arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::eq,
+                                      back, scaled);
+    auto valid = arith::AndIOp::create(rewriter, loc, kept,
+                                       allImmediate(rewriter, loc, bits));
+    auto tagged = arith::OrIOp::create(rewriter, loc, shifted, one);
+    return {tagged, valid};
+  }
+};
+
+struct ShRSILowering : FastPathLowering<ShRSILowering> {
+  using FastPathLowering::FastPathLowering;
+  using Op = ShRSIOp;
+
+  static StringRef getRuntimeName(bool atomic) {
+    return atomic ? "rcgmp_mpz_shr_atomic" : "rcgmp_mpz_shr";
+  }
+
+  static Value buildRuntimeOperand(PatternRewriter &rewriter, Location loc,
+                                   Value amount, IntegerType word) {
+    return saturatingWord(rewriter, loc, amount, word);
+  }
+
+  static FastPath buildFastPath(PatternRewriter &rewriter, Location loc,
+                                Operation *, ValueRange operands) {
+    Value bits = operands[0], amount = operands[1];
+    unsigned width = cast<IntegerType>(bits.getType()).getWidth();
+    // The tagged bits 4*x + 1 shifted right by n have floor(4*x / 2^n) above
+    // the tag, as the odd tag never reaches a multiple of 2^n, and clearing
+    // the two low bits leaves 4 * floor(x / 2^n). That never leaves the
+    // immediate range, and a shift by the width or more leaves the sign.
+    auto shifted = arith::ShRSIOp::create(rewriter, loc, bits,
+                                          clampedShift(rewriter, loc, amount));
+    auto mask = arith::ConstantIntOp::create(rewriter, loc, -4, width);
+    auto scaled = arith::AndIOp::create(rewriter, loc, shifted, mask);
+    auto one = arith::ConstantIntOp::create(rewriter, loc, 1, width);
+    auto tagged = arith::OrIOp::create(rewriter, loc, scaled, one);
+    return {tagged, allImmediate(rewriter, loc, bits)};
+  }
+};
+
 struct CmpILowering : FastPathLowering<CmpILowering> {
   using FastPathLowering::FastPathLowering;
   using Op = CmpIOp;
@@ -496,15 +588,17 @@ struct ConvertRCGMPToSCFPass
   }
   void runOnOperation() override {
     RewritePatternSet patterns(&getContext());
-    patterns.add<ConstantLowering, FromIntLowering, RetainLowering,
-                 ReleaseLowering, AddILowering, SubILowering, MulILowering,
-                 AndILowering, XOrILowering, OrILowering, NotILowering,
-                 NegILowering, AbsILowering, CmpILowering>(&getContext());
+    patterns
+        .add<ConstantLowering, FromIntLowering, RetainLowering, ReleaseLowering,
+             AddILowering, SubILowering, MulILowering, AndILowering,
+             XOrILowering, OrILowering, NotILowering, NegILowering,
+             AbsILowering, ShLILowering, ShRSILowering, CmpILowering>(
+            &getContext());
     populateMatchLoweringPatterns(patterns);
     ConversionTarget target(getContext());
     target.addIllegalOp<ConstantOp, FromIntOp, RetainOp, ReleaseOp, AddIOp,
                         SubIOp, MulIOp, AndIOp, XOrIOp, OrIOp, NotIOp, NegIOp,
-                        AbsIOp, CmpIOp, MatchOp, YieldOp>();
+                        AbsIOp, ShLIOp, ShRSIOp, CmpIOp, MatchOp, YieldOp>();
     target.markUnknownOpDynamicallyLegal([](Operation *) { return true; });
     if (failed(applyPartialConversion(getOperation(), target,
                                       std::move(patterns))))

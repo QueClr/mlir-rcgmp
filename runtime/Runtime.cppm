@@ -9,4 +9,5 @@ export import :add;
 export import :multiply;
 export import :bitwise;
 export import :unary;
+export import :shift;
 export import :compare;

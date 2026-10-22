@@ -159,6 +159,39 @@ def RCGMP_AbsIOp : RCGMP_UnaryOp<"absi", [{
   let summary = "Consume an integer reference and produce its absolute value";
 }
 
+class RCGMP_ShiftOp<string name, string semantics>
+    : RCGMPOp<name, [AllTypesMatch<["value", "result"]>,
+                     RCGMP_NotSpeculatable]> {
+  let arguments = (ins
+      Arg<RCGMP_MpzType, "consumed integer", RCGMP_ConsumedEffects>:$value,
+      AnySignlessInteger:$amount);
+  let results = (outs Res<RCGMP_MpzType, "new integer", [MemAlloc]>:$result);
+  let assemblyFormat = [{
+    $value `,` $amount attr-dict `:` type($result) `,` type($amount)
+  }];
+  let description = [{
+    The integer operand consumes one owned reference, and the result owns one
+    reference. A uniquely owned operand may supply result storage; a shared
+    operand retains its value. The amount is an unsigned number of bits.
+  }] # semantics;
+}
+
+def RCGMP_ShLIOp : RCGMP_ShiftOp<"shli", [{
+    The result is the integer times two to the power of the amount, exactly. An
+    amount whose result cannot be allocated terminates the program, like any
+    allocation that fails.
+  }]> {
+  let summary = "Consume an integer reference and shift it left";
+}
+
+def RCGMP_ShRSIOp : RCGMP_ShiftOp<"shrsi", [{
+    The result is the integer divided by two to the power of the amount,
+    rounded toward negative infinity: an arithmetic shift of its infinite
+    two's-complement bits.
+  }]> {
+  let summary = "Consume an integer reference and shift it right arithmetically";
+}
+
 def RCGMP_CmpIOp : RCGMPOp<"cmpi", [SameTypeOperands, RCGMP_NotSpeculatable]> {
   let summary = "Compare two borrowed integers";
   let description = [{

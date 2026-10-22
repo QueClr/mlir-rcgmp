@@ -96,6 +96,7 @@ rcgmp_native_test(unary)
 rcgmp_native_test(signed-overflow)
 rcgmp_native_test(constant)
 rcgmp_native_test(compare)
+rcgmp_native_test(shift)
 
 # The differential harness compares each feature, compiled from its own MLIR
 # source, with GMP. It also exercises the comparisons in compare.mlir.
