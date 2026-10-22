@@ -34,6 +34,14 @@ void *andi_local(void *, void *);
 void *andi_atomic(void *, void *);
 void *xori_local(void *, void *);
 void *xori_atomic(void *, void *);
+void *ori_local(void *, void *);
+void *ori_atomic(void *, void *);
+void *noti_local(void *);
+void *noti_atomic(void *);
+void *negi_local(void *);
+void *negi_atomic(void *);
+void *absi_local(void *);
+void *absi_atomic(void *);
 void *retain_local(void *);
 void *retain_atomic(void *);
 void release_local(void *);
@@ -96,7 +104,7 @@ fuzztest::Domain<std::size_t> AnyConstant() {
   return fuzztest::InRange<std::size_t>(0, constantValues.size() - 1);
 }
 
-enum class Operator { addi, subi, muli, andi, xori };
+enum class Operator { addi, subi, muli, andi, xori, ori };
 
 // The compiled and runtime entry points of an operation, indexed by counting,
 // and the GMP function it must agree with.
@@ -107,7 +115,7 @@ struct Operation {
   Oracle oracle;
 };
 
-constexpr std::array<Operation, 5> operations{{
+constexpr std::array<Operation, 6> operations{{
     {"addi",
      {addi_local, addi_atomic},
      {rcgmp_mpz_add, rcgmp_mpz_add_atomic},
@@ -128,10 +136,14 @@ constexpr std::array<Operation, 5> operations{{
      {xori_local, xori_atomic},
      {rcgmp_mpz_xor, rcgmp_mpz_xor_atomic},
      mpz_xor},
+    {"ori",
+     {ori_local, ori_atomic},
+     {rcgmp_mpz_or, rcgmp_mpz_or_atomic},
+     mpz_ior},
 }};
 
 constexpr std::array operators{Operator::addi, Operator::subi, Operator::muli,
-                               Operator::andi, Operator::xori};
+                               Operator::andi, Operator::xori, Operator::ori};
 
 const Operation &operation(Operator op) {
   return operations[std::to_underlying(op)];
@@ -143,6 +155,48 @@ template <typename Sink> void AbslStringify(Sink &sink, Operator op) {
 
 fuzztest::Domain<Operator> AnyOperator() {
   return fuzztest::ElementOf(std::vector(operators.begin(), operators.end()));
+}
+
+enum class UnaryOperator { noti, negi, absi };
+
+// The compiled and runtime entry points of a unary operation, indexed by
+// counting, and the GMP function it must agree with.
+struct UnaryOperation {
+  std::string_view name;
+  std::array<void *(*)(void *), 2> compiled;
+  std::array<void *(*)(void *, std::uint32_t), 2> runtime;
+  UnaryOracle oracle;
+};
+
+constexpr std::array<UnaryOperation, 3> unaryOperations{{
+    {"noti",
+     {noti_local, noti_atomic},
+     {rcgmp_mpz_not, rcgmp_mpz_not_atomic},
+     mpz_com},
+    {"negi",
+     {negi_local, negi_atomic},
+     {rcgmp_mpz_neg, rcgmp_mpz_neg_atomic},
+     mpz_neg},
+    {"absi",
+     {absi_local, absi_atomic},
+     {rcgmp_mpz_abs, rcgmp_mpz_abs_atomic},
+     mpz_abs},
+}};
+
+constexpr std::array unaryOperators{UnaryOperator::noti, UnaryOperator::negi,
+                                    UnaryOperator::absi};
+
+const UnaryOperation &operation(UnaryOperator op) {
+  return unaryOperations[std::to_underlying(op)];
+}
+
+template <typename Sink> void AbslStringify(Sink &sink, UnaryOperator op) {
+  sink.Append(operation(op).name);
+}
+
+fuzztest::Domain<UnaryOperator> AnyUnaryOperator() {
+  return fuzztest::ElementOf(
+      std::vector(unaryOperators.begin(), unaryOperators.end()));
 }
 
 // A heap operand is allocated with spare limbs beyond its magnitude, as results
@@ -292,33 +346,33 @@ struct BinaryCase {
   }
 };
 
-} // namespace rcgmp::test
-
-namespace rcgmp::test {
-
 // Each operand position holding operand consumed one of its references, and the
 // caller's reference kept its value. The result may be another reference to it.
 // An immortal operand keeps its zero count.
-void releaseShared(const BinaryCase &test, void *operand, const Integer &value,
+void releaseShared(Counting counting, void *operand, const Integer &value,
                    void *result, bool immortal) {
   EXPECT_THAT(operand, Represents(value)) << "shared operand was modified";
   if (!Handle(operand).isImmediate())
-    EXPECT_EQ(references(operand, test.counting),
+    EXPECT_EQ(references(operand, counting),
               immortal ? 0u : 1u + (operand == result))
         << "operand positions did not each consume one reference";
-  releases[std::to_underlying(test.counting)](operand);
+  releases[std::to_underlying(counting)](operand);
 }
 
 // Immortal operands are neither counted nor written, even when the result is
 // the same object. Those made here are then freed.
-void dropImmortal(const BinaryCase &test, void *operand, const Integer &value,
+void dropImmortal(Counting counting, void *operand, const Integer &value,
                   bool constant) {
   EXPECT_THAT(operand, Represents(value)) << "immortal operand was modified";
-  EXPECT_EQ(references(operand, test.counting), 0u)
+  EXPECT_EQ(references(operand, counting), 0u)
       << "immortal operand was counted";
   if (!constant)
-    rcgmp_mpz_free(operand, test.counting == Counting::atomic);
+    rcgmp_mpz_free(operand, counting == Counting::atomic);
 }
+
+} // namespace rcgmp::test
+
+namespace rcgmp::test {
 
 // Complements the spare limbs of a heap operand made by makeOperand. Operands
 // otherwise share one pattern of stale limbs, which would hide a comparison
@@ -378,14 +432,14 @@ void checkBinary(const BinaryCase &test) {
     EXPECT_EQ(counter.allocations(), 0u)
         << "result did not reuse a unique operand";
   if (sharing.lhs)
-    releaseShared(test, x, lhs, result, immortalX);
+    releaseShared(test.counting, x, lhs, result, immortalX);
   if (sharing.rhs)
-    releaseShared(test, y, rhs, result, immortalY);
+    releaseShared(test.counting, y, rhs, result, immortalY);
   releases[index](result);
   if (immortalX)
-    dropImmortal(test, x, lhs, test.lhsConstant.has_value());
+    dropImmortal(test.counting, x, lhs, test.lhsConstant.has_value());
   if (immortalY && y != x)
-    dropImmortal(test, y, rhs, test.rhsConstant.has_value());
+    dropImmortal(test.counting, y, rhs, test.rhsConstant.has_value());
   EXPECT_TRUE(balance.balanced())
       << "allocations and deallocations do not balance";
 }

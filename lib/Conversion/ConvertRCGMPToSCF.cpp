@@ -224,6 +224,104 @@ struct XOrILowering : FastPathLowering<XOrILowering> {
   }
 };
 
+struct OrILowering : FastPathLowering<OrILowering> {
+  using FastPathLowering::FastPathLowering;
+  using Op = OrIOp;
+
+  static StringRef getRuntimeName(bool atomic) {
+    return atomic ? "rcgmp_mpz_or_atomic" : "rcgmp_mpz_or";
+  }
+
+  static FastPath buildFastPath(PatternRewriter &rewriter, Location loc,
+                                Operation *, ValueRange operands) {
+    Value lhs = operands[0], rhs = operands[1];
+    auto bits = arith::OrIOp::create(rewriter, loc, lhs, rhs);
+    return {bits, allImmediate(rewriter, loc, {lhs, rhs})};
+  }
+};
+
+struct NotILowering : FastPathLowering<NotILowering> {
+  using FastPathLowering::FastPathLowering;
+  using Op = NotIOp;
+
+  static StringRef getRuntimeName(bool atomic) {
+    return atomic ? "rcgmp_mpz_not_atomic" : "rcgmp_mpz_not";
+  }
+
+  static FastPath buildFastPath(PatternRewriter &rewriter, Location loc,
+                                Operation *, ValueRange operands) {
+    Value bits = operands[0];
+    // Complementing the payload of 4*x+1 keeps the tag and never leaves the
+    // immediate range.
+    auto payload = arith::ConstantIntOp::create(
+        rewriter, loc, -4, cast<IntegerType>(bits.getType()).getWidth());
+    auto tagged = arith::XOrIOp::create(rewriter, loc, bits, payload);
+    return {tagged, allImmediate(rewriter, loc, bits)};
+  }
+};
+
+// Negation of 4*x+1 is 2 minus the tagged bits. It leaves the immediate range
+// only at its minimum, whose tagged bits are the signed word minimum plus one.
+struct Negation {
+  Value value;
+  Value valid;
+};
+
+Negation buildNegation(PatternRewriter &rewriter, Location loc, Value bits) {
+  unsigned width = cast<IntegerType>(bits.getType()).getWidth();
+  auto two = arith::ConstantIntOp::create(rewriter, loc, 2, width);
+  auto negated = arith::SubIOp::create(rewriter, loc, two, bits);
+  APInt minimum = APInt::getSignedMinValue(width) + 1;
+  auto tagMinimum = arith::ConstantOp::create(
+      rewriter, loc, rewriter.getIntegerAttr(bits.getType(), minimum));
+  auto inRange = arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::ne,
+                                       bits, tagMinimum);
+  return {negated, inRange};
+}
+
+struct NegILowering : FastPathLowering<NegILowering> {
+  using FastPathLowering::FastPathLowering;
+  using Op = NegIOp;
+
+  static StringRef getRuntimeName(bool atomic) {
+    return atomic ? "rcgmp_mpz_neg_atomic" : "rcgmp_mpz_neg";
+  }
+
+  static FastPath buildFastPath(PatternRewriter &rewriter, Location loc,
+                                Operation *, ValueRange operands) {
+    Value bits = operands[0];
+    auto [negated, inRange] = buildNegation(rewriter, loc, bits);
+    auto valid = arith::AndIOp::create(rewriter, loc, inRange,
+                                       allImmediate(rewriter, loc, bits));
+    return {negated, valid};
+  }
+};
+
+struct AbsILowering : FastPathLowering<AbsILowering> {
+  using FastPathLowering::FastPathLowering;
+  using Op = AbsIOp;
+
+  static StringRef getRuntimeName(bool atomic) {
+    return atomic ? "rcgmp_mpz_abs_atomic" : "rcgmp_mpz_abs";
+  }
+
+  static FastPath buildFastPath(PatternRewriter &rewriter, Location loc,
+                                Operation *, ValueRange operands) {
+    Value bits = operands[0];
+    auto [negated, inRange] = buildNegation(rewriter, loc, bits);
+    // 4*x+1 has the sign of x.
+    auto zero = arith::ConstantIntOp::create(
+        rewriter, loc, 0, cast<IntegerType>(bits.getType()).getWidth());
+    auto negative = arith::CmpIOp::create(
+        rewriter, loc, arith::CmpIPredicate::slt, bits, zero);
+    auto magnitude =
+        arith::SelectOp::create(rewriter, loc, negative, negated, bits);
+    auto valid = arith::AndIOp::create(rewriter, loc, inRange,
+                                       allImmediate(rewriter, loc, bits));
+    return {magnitude, valid};
+  }
+};
+
 struct CmpILowering : FastPathLowering<CmpILowering> {
   using FastPathLowering::FastPathLowering;
   using Op = CmpIOp;
@@ -291,10 +389,12 @@ struct ConvertRCGMPToSCFPass
     RewritePatternSet patterns(&getContext());
     patterns.add<ConstantLowering, FromIntLowering, RetainLowering,
                  ReleaseLowering, AddILowering, SubILowering, MulILowering,
-                 AndILowering, XOrILowering, CmpILowering>(&getContext());
+                 AndILowering, XOrILowering, OrILowering, NotILowering,
+                 NegILowering, AbsILowering, CmpILowering>(&getContext());
     ConversionTarget target(getContext());
     target.addIllegalOp<ConstantOp, FromIntOp, RetainOp, ReleaseOp, AddIOp,
-                        SubIOp, MulIOp, AndIOp, XOrIOp, CmpIOp>();
+                        SubIOp, MulIOp, AndIOp, XOrIOp, OrIOp, NotIOp, NegIOp,
+                        AbsIOp, CmpIOp>();
     target.markUnknownOpDynamicallyLegal([](Operation *) { return true; });
     if (failed(applyPartialConversion(getOperation(), target,
                                       std::move(patterns))))

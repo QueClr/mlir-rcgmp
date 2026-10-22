@@ -110,3 +110,28 @@ func.func @xor_atomic(%x: !rcgmp.mpz<atomic>, %y: !rcgmp.mpz<atomic>) -> !rcgmp.
   %r = rcgmp.xori %x, %y : !rcgmp.mpz<atomic>
   return %r : !rcgmp.mpz<atomic>
 }
+// SCF-LABEL: func.func @or_local
+// SCF: arith.ori
+// SCF: scf.if
+// SCF: rcgmp.bridge.mpz.from_bits
+// SCF: rcgmp.bridge.mpz.is_unique
+// SCF: func.call @rcgmp_mpz_or
+// LLVM-LABEL: llvm.func @or_local
+// LLVM: llvm.call @rcgmp_mpz_or
+func.func @or_local(%x: !rcgmp.mpz, %y: !rcgmp.mpz) -> !rcgmp.mpz {
+  %r = rcgmp.ori %x, %y : !rcgmp.mpz
+  return %r : !rcgmp.mpz
+}
+// SCF-LABEL: func.func @or_atomic
+// SCF: arith.ori
+// SCF: scf.if
+// SCF: rcgmp.bridge.mpz.from_bits
+// SCF: rcgmp.bridge.mpz.is_unique
+// SCF: func.call @rcgmp_mpz_or_atomic
+// LLVM-LABEL: llvm.func @or_atomic
+// LLVM: llvm.load {{.*}} atomic acquire
+// LLVM: llvm.call @rcgmp_mpz_or_atomic
+func.func @or_atomic(%x: !rcgmp.mpz<atomic>, %y: !rcgmp.mpz<atomic>) -> !rcgmp.mpz<atomic> {
+  %r = rcgmp.ori %x, %y : !rcgmp.mpz<atomic>
+  return %r : !rcgmp.mpz<atomic>
+}

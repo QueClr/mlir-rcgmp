@@ -1,4 +1,4 @@
-// Compiled subtraction, multiplication, AND, and XOR.
+// Compiled subtraction, multiplication, AND, XOR, and OR.
 #include "RCGMP/Runtime/Mpz.h"
 #include <fuzztest/fuzztest.h>
 #include <gmock/gmock.h>
@@ -27,6 +27,8 @@ void *and_local(void *, void *);
 void *and_atomic(void *, void *);
 void *xor_local(void *, void *);
 void *xor_atomic(void *, void *);
+void *or_local(void *, void *);
+void *or_atomic(void *, void *);
 }
 
 namespace {
@@ -35,7 +37,7 @@ using rcgmp::Counting;
 using rcgmp::Handle;
 using namespace rcgmp::test;
 
-enum class Operator { subtract, multiply, bitwiseAnd, bitwiseXor };
+enum class Operator { subtract, multiply, bitwiseAnd, bitwiseXor, bitwiseOr };
 
 struct Operation {
   std::string_view name;
@@ -44,11 +46,12 @@ struct Operation {
   Oracle oracle;
 };
 
-constexpr std::array<Operation, 4> operations{{
+constexpr std::array<Operation, 5> operations{{
     {"sub", {sub_local, sub_atomic}, mpz_sub},
     {"mul", {mul_local, mul_atomic}, mpz_mul},
     {"and", {and_local, and_atomic}, mpz_and},
     {"xor", {xor_local, xor_atomic}, mpz_xor},
+    {"or", {or_local, or_atomic}, mpz_ior},
 }};
 
 const Operation &operation(Operator op) {
@@ -68,7 +71,8 @@ void MatchesGmp(Operator op, const std::pair<Integer, Integer> &operands,
 FUZZ_TEST(Binary, MatchesGmp)
     .WithDomains(fuzztest::ElementOf({Operator::subtract, Operator::multiply,
                                       Operator::bitwiseAnd,
-                                      Operator::bitwiseXor}),
+                                      Operator::bitwiseXor,
+                                      Operator::bitwiseOr}),
                  AnyOperands(), AnyCounting(), AnySharing());
 
 class BinaryTest
@@ -104,7 +108,8 @@ INSTANTIATE_TEST_SUITE_P(
     Operations, BinaryTest,
     ::testing::Combine(::testing::Values(Operator::subtract, Operator::multiply,
                                          Operator::bitwiseAnd,
-                                         Operator::bitwiseXor),
+                                         Operator::bitwiseXor,
+                                         Operator::bitwiseOr),
                        ::testing::ValuesIn(countings)),
     parameterName);
 

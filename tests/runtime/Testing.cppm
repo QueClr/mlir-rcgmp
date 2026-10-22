@@ -131,6 +131,7 @@ private:
 };
 
 using Oracle = void (*)(mpz_ptr, mpz_srcptr, mpz_srcptr);
+using UnaryOracle = void (*)(mpz_ptr, mpz_srcptr);
 
 // The canonical runtime integer for value. The result owns one reference.
 void *toRuntime(const Integer &value) {
@@ -231,6 +232,25 @@ void checkBinary(void *(*apply)(void *, void *), Oracle oracle,
   if (sharing.rhs) {
     EXPECT_THAT(y, Represents(rhs));
     rcgmp_mpz_release(y, atomic);
+  }
+  rcgmp_mpz_release(result, atomic);
+}
+
+// Applies a compiled unary operation to an operand, shared if the caller keeps
+// an extra reference, and compares the result with oracle.
+void checkUnary(void *(*apply)(void *), UnaryOracle oracle,
+                const Integer &value, Counting counting, bool shared) {
+  bool atomic = counting == Counting::atomic;
+  void *x = toRuntime(value);
+  if (shared)
+    rcgmp_mpz_retain(x, atomic);
+  Integer expected;
+  oracle(expected, value);
+  void *result = apply(x);
+  EXPECT_THAT(result, Represents(expected)) << "operand = " << value;
+  if (shared) {
+    EXPECT_THAT(x, Represents(value));
+    rcgmp_mpz_release(x, atomic);
   }
   rcgmp_mpz_release(result, atomic);
 }

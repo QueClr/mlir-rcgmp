@@ -107,6 +107,7 @@ endif()
 
 rcgmp_native_test(addition)
 rcgmp_native_test(binary)
+rcgmp_native_test(unary)
 rcgmp_native_test(signed-overflow)
 rcgmp_native_test(constant)
 rcgmp_native_test(compare)
@@ -116,10 +117,11 @@ rcgmp_native_test(compare)
 add_executable(rcgmp-differential
   runtime/differential/binary.cpp runtime/differential/chain.cpp
   runtime/differential/compare.cpp runtime/differential/construction.cpp
-  runtime/differential/counting.cpp ${CMAKE_CURRENT_BINARY_DIR}/compare.o)
+  runtime/differential/counting.cpp runtime/differential/unary.cpp
+  ${CMAKE_CURRENT_BINARY_DIR}/compare.o)
 target_sources(rcgmp-differential PRIVATE FILE_SET CXX_MODULES FILES
   runtime/differential/Differential.cppm)
-foreach(name binary constant counting from-int)
+foreach(name binary constant counting from-int unary)
   rcgmp_lower_mlir(differential/${name} object)
   target_sources(rcgmp-differential PRIVATE ${object})
 endforeach()

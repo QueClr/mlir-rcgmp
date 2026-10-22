@@ -36,8 +36,20 @@ void *rcgmp_mpz_mul(void *lhs, void *rhs, uint32_t reuse);
 void *rcgmp_mpz_mul_atomic(void *lhs, void *rhs, uint32_t reuse);
 void *rcgmp_mpz_and(void *lhs, void *rhs, uint32_t reuse);
 void *rcgmp_mpz_and_atomic(void *lhs, void *rhs, uint32_t reuse);
+void *rcgmp_mpz_or(void *lhs, void *rhs, uint32_t reuse);
+void *rcgmp_mpz_or_atomic(void *lhs, void *rhs, uint32_t reuse);
 void *rcgmp_mpz_xor(void *lhs, void *rhs, uint32_t reuse);
 void *rcgmp_mpz_xor_atomic(void *lhs, void *rhs, uint32_t reuse);
+
+// Consume one reference and return one owned result. reuse bit 0 permits
+// reusing the operand; set it only for a heap operand proven uniquely owned.
+// The complement of x is -x - 1, as in infinite two's complement.
+void *rcgmp_mpz_not(void *value, uint32_t reuse);
+void *rcgmp_mpz_not_atomic(void *value, uint32_t reuse);
+void *rcgmp_mpz_neg(void *value, uint32_t reuse);
+void *rcgmp_mpz_neg_atomic(void *value, uint32_t reuse);
+void *rcgmp_mpz_abs(void *value, uint32_t reuse);
+void *rcgmp_mpz_abs_atomic(void *value, uint32_t reuse);
 
 // Borrow both operands and return a negative, zero, or positive value as lhs is
 // less than, equal to, or greater than rhs. Reference counts are unchanged.

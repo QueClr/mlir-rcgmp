@@ -6,6 +6,7 @@
 #include <gtest/gtest.h>
 
 #include <cstddef>
+#include <optional>
 #include <ranges>
 #include <utility>
 #include <variant>
@@ -21,11 +22,13 @@ using rcgmp::Counting;
 using namespace rcgmp::test;
 
 // A step of a chain applies an operation to the result so far and either a
-// fresh operand, one related to the result so far, or a compiled constant.
+// fresh operand, one related to the result so far, or a compiled constant,
+// then possibly a unary operation.
 struct Step {
   Operator op;
   std::variant<Integer, Relation, Constant> operand;
   std::size_t spare;
+  std::optional<UnaryOperator> unary;
 };
 
 // Each chain feeds every result into the next operation as its uniquely owned
@@ -60,21 +63,29 @@ void ChainsMatchGmp(Counting counting, const Operand &start,
         << operation(step.op).name << " at step " << position + 1 << " of "
         << steps.size() << ": lhs = " << accumulator << ", rhs = " << operand;
     accumulator = std::move(expected);
+    if (step.unary) {
+      operation(*step.unary).oracle(expected, accumulator);
+      result = operation(*step.unary).compiled[index](result);
+      ASSERT_THAT(result, Represents(expected))
+          << operation(*step.unary).name << " at step " << position + 1
+          << " of " << steps.size() << ": operand = " << accumulator;
+      accumulator = std::move(expected);
+    }
   }
   releases[index](result);
   EXPECT_TRUE(balance.balanced())
       << "allocations and deallocations do not balance";
 }
 FUZZ_TEST(Differential, ChainsMatchGmp)
-    .WithDomains(
-        AnyCounting(), AnyOperand(),
-        fuzztest::VectorOf(fuzztest::StructOf<Step>(
-                               AnyOperator(),
-                               fuzztest::VariantOf(
-                                   AnyInteger(), AnyRelation(),
-                                   fuzztest::StructOf<Constant>(AnyConstant())),
-                               AnySpare()))
-            .WithMinSize(8)
-            .WithMaxSize(16));
+    .WithDomains(AnyCounting(), AnyOperand(),
+                 fuzztest::VectorOf(
+                     fuzztest::StructOf<Step>(
+                         AnyOperator(),
+                         fuzztest::VariantOf(
+                             AnyInteger(), AnyRelation(),
+                             fuzztest::StructOf<Constant>(AnyConstant())),
+                         AnySpare(), fuzztest::OptionalOf(AnyUnaryOperator())))
+                     .WithMinSize(8)
+                     .WithMaxSize(16));
 
 } // namespace

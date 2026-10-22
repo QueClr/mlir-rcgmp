@@ -94,4 +94,12 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<!llvm.ptr, dense<
     %r = rcgmp.muli %x, %y : !rcgmp.mpz<atomic>
     return %r : !rcgmp.mpz<atomic>
   }
+  // The tagged minimum follows the handle width.
+  // CHECK-LABEL: llvm.func @neg
+  // CHECK: llvm.mlir.constant(-2147483647 : i32)
+  // CHECK: llvm.icmp "ne"
+  func.func @neg(%x: !rcgmp.mpz) -> !rcgmp.mpz {
+    %r = rcgmp.negi %x : !rcgmp.mpz
+    return %r : !rcgmp.mpz
+  }
 }

@@ -118,6 +118,45 @@ def RCGMP_XOrIOp : RCGMP_BinaryOp<"xori", [{
   let summary = "Consume two integer references and produce their bitwise XOR";
 }
 
+def RCGMP_OrIOp : RCGMP_BinaryOp<"ori", [{
+    Operands are interpreted as infinite two's-complement bit strings, including
+    sign extension for negative integers.
+  }], [Commutative]> {
+  let summary = "Consume two integer references and produce their bitwise OR";
+}
+
+class RCGMP_UnaryOp<string name, string semantics>
+    : RCGMPOp<name, [SameOperandsAndResultType, RCGMP_NotSpeculatable]> {
+  let arguments = (ins
+      Arg<RCGMP_MpzType, "consumed operand", RCGMP_ConsumedEffects>:$operand);
+  let results = (outs Res<RCGMP_MpzType, "new integer", [MemAlloc]>:$result);
+  let assemblyFormat = "$operand attr-dict `:` type($result)";
+  let description = [{
+    The operand consumes one owned reference, and the result owns one
+    reference. A uniquely owned operand may supply result storage; a shared
+    operand retains its value.
+  }] # semantics;
+}
+
+def RCGMP_NotIOp : RCGMP_UnaryOp<"noti", [{
+    The operand is interpreted as an infinite two's-complement bit string, so
+    the complement of x is -x - 1.
+  }]> {
+  let summary = "Consume an integer reference and produce its bitwise complement";
+}
+
+def RCGMP_NegIOp : RCGMP_UnaryOp<"negi", [{
+    Negation is exact, with no fixed-width overflow.
+  }]> {
+  let summary = "Consume an integer reference and produce its negation";
+}
+
+def RCGMP_AbsIOp : RCGMP_UnaryOp<"absi", [{
+    The absolute value is exact, with no fixed-width overflow.
+  }]> {
+  let summary = "Consume an integer reference and produce its absolute value";
+}
+
 def RCGMP_CmpIOp : RCGMPOp<"cmpi", [SameTypeOperands, RCGMP_NotSpeculatable]> {
   let summary = "Compare two borrowed integers";
   let description = [{
