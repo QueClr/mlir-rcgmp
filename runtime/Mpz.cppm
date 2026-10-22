@@ -119,8 +119,18 @@ export template <Counting counting> void deallocate(Mpz &value) {
                 alignof(Mpz));
 }
 
+// A counted integer holds at least one reference while it is live, so a zero
+// count identifies a static immortal integer for its whole lifetime.
+template <Counting counting> bool isImmortal(Mpz &value) {
+  if constexpr (counting == Counting::atomic)
+    return std::atomic_ref<std::uintptr_t>(value.references)
+               .load(std::memory_order::relaxed) == 0;
+  else
+    return value.references == 0;
+}
+
 export template <Counting counting> void retain(Handle value) {
-  if (value.isImmediate())
+  if (value.isImmediate() || isImmortal<counting>(value.heap()))
     return;
   std::uintptr_t &references = value.heap().references;
   std::uintptr_t old;
@@ -134,7 +144,7 @@ export template <Counting counting> void retain(Handle value) {
 }
 
 export template <Counting counting> void release(Handle value) {
-  if (value.isImmediate())
+  if (value.isImmediate() || isImmortal<counting>(value.heap()))
     return;
   std::uintptr_t &references = value.heap().references;
   std::uintptr_t old;

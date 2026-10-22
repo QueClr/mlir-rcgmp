@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <format>
+#include <optional>
 #include <ranges>
 #include <string>
 #include <string_view>
@@ -55,6 +56,8 @@ void *from_signed_i64_atomic(std::uint64_t);
 void *from_unsigned_i64_atomic(std::uint64_t);
 void *from_signed_i129_atomic(std::uint64_t, std::uint64_t, std::uint64_t);
 void *from_unsigned_i129_atomic(std::uint64_t, std::uint64_t, std::uint64_t);
+void *constant_local(std::size_t);
+void *constant_atomic(std::size_t);
 }
 
 namespace {
@@ -69,6 +72,34 @@ constexpr unsigned word = GMP_NUMB_BITS;
 // runtime, so both implementations operate on the same objects.
 constexpr std::array retains{retain_local, retain_atomic};
 constexpr std::array releases{release_local, release_atomic};
+
+// Compiled constants, selected by index, and their values in the order of
+// differential.mlir.
+constexpr std::array constants{constant_local, constant_atomic};
+constexpr std::array constantValues{
+    "0",
+    "-1",
+    "2305843009213693951",
+    "-2305843009213693952",
+    "2305843009213693952",
+    "-2305843009213693953",
+    "9223372036854775807",
+    "-9223372036854775808",
+    "18446744073709551615",
+    "-18446744073709551616",
+    "340282366920938463463374607431768211455",
+    "-340282366920938463463374607431768211457",
+};
+
+Integer constantValue(std::size_t index) {
+  Integer value;
+  mpz_set_str(value, constantValues[index], 10);
+  return value;
+}
+
+fuzztest::Domain<std::size_t> AnyConstant() {
+  return fuzztest::InRange<std::size_t>(0, constantValues.size() - 1);
+}
 
 enum class Operator { addi, subi, muli, andi, xori };
 
@@ -121,6 +152,8 @@ fuzztest::Domain<Operator> AnyOperator() {
 
 // A heap operand is allocated with spare limbs beyond its magnitude, as results
 // of earlier operations often are, so that an operation may reuse it in place.
+// A constant operand is the object that compiled code produces for the value,
+// which has no spare limbs.
 struct Operand {
   Integer value;
   std::size_t spare = 0;
@@ -129,10 +162,10 @@ struct Operand {
   friend void AbslStringify(Sink &sink, const Operand &operand) {
     sink.Append(operand.describe());
   }
-  std::string describe() const {
-    return value.fitsImmediate()
-               ? std::format("{} (immediate)", value.hex())
-               : std::format("{} ({} spare limbs)", value.hex(), spare);
+  std::string describe(bool constant = false) const {
+    return value.fitsImmediate() ? std::format("{} (immediate)", value.hex())
+           : constant ? std::format("{} (constant)", value.hex())
+                      : std::format("{} ({} spare limbs)", value.hex(), spare);
   }
 };
 
@@ -144,7 +177,10 @@ fuzztest::Domain<std::size_t> AnySpare() {
   return fuzztest::InRange<std::size_t>(0, 6);
 }
 
-void *makeOperand(const Operand &operand, Counting counting) {
+// An immortal heap operand keeps its spare limbs, which would let a counted one
+// hold the result in place.
+void *makeOperand(const Operand &operand, Counting counting,
+                  bool immortal = false) {
   void *handle = toRuntime(operand.value);
   if (Handle(handle).isImmediate())
     return handle;
@@ -157,79 +193,156 @@ void *makeOperand(const Operand &operand, Counting counting) {
        std::views::enumerate(padded.limbs().subspan(exact.count())))
     limb = index % 2 ? GMP_NUMB_MAX / 0xff * 0xa5 : GMP_NUMB_MAX;
   padded.size = exact.size;
+  if (immortal)
+    padded.references = 0;
   rcgmp_mpz_release(handle, counting == Counting::atomic);
   return Handle(padded).pointer();
 }
 
+// Which heap operands have a zero reference count, like compiled constants.
+struct Immortality {
+  bool lhs = false;
+  bool rhs = false;
+};
+
+// The sharing and immortality of a pair of operands.
+struct Ownership {
+  Sharing sharing;
+  Immortality immortal;
+};
+
+constexpr std::array<Ownership, 7> ownerships{{
+    {{false, false}, {false, false}},
+    {{true, false}, {false, false}},
+    {{false, true}, {false, false}},
+    {{true, true}, {false, false}},
+    {{false, false}, {true, false}},
+    {{true, false}, {false, true}},
+    {{false, false}, {true, true}},
+}};
+
+// Aliased operands share their sharing and immortality.
+constexpr std::array<Ownership, 3> aliasOwnerships{{
+    {{false, false}, {false, false}},
+    {{true, false}, {false, false}},
+    {{false, false}, {true, false}},
+}};
+
 // A shared operand has an extra reference held by the caller, which must
 // survive with its value. An aliased rhs is a retained reference to the lhs.
+// An immortal heap operand has a zero reference count, like a compiled
+// constant.
 struct BinaryCase {
   Operator op;
   Counting counting;
-  Sharing sharing;
+  Ownership ownership;
   bool aliased;
   Operand lhs, rhs;
   // Each heap operand has room for the result, so a unique one must hold it.
   bool roomy;
+  // The compiled constants, by index, that hold the lhs or the rhs.
+  std::optional<std::size_t> lhsConstant = std::nullopt,
+                             rhsConstant = std::nullopt;
 
   std::string describe() const {
-    std::string_view ownership =
+    auto [sharing, immortal] = ownership;
+    std::string_view counted =
         aliased ? (sharing.lhs ? "aliased shared operand" : "aliased operands")
         : sharing.lhs && sharing.rhs ? "shared operands"
         : sharing.lhs                ? "shared lhs"
         : sharing.rhs                ? "shared rhs"
                                      : "unique operands";
-    return std::format("{} ({}, {}): lhs = {}, rhs = {}", operation(op).name,
-                       rcgmp::name(counting), ownership, lhs.describe(),
-                       rhs.describe());
+    std::string_view immortality = immortal.lhs && immortal.rhs
+                                       ? ", immortal operands"
+                                   : immortal.lhs ? ", immortal lhs"
+                                   : immortal.rhs ? ", immortal rhs"
+                                                  : "";
+    return std::format("{} ({}, {}{}): lhs = {}, rhs = {}", operation(op).name,
+                       rcgmp::name(counting), counted, immortality,
+                       lhs.describe(lhsConstant.has_value()),
+                       rhs.describe(rhsConstant.has_value()));
   }
 };
 
+// The compiled constant or the runtime integer holding operand.
+void *makeOperand(const Operand &operand, std::optional<std::size_t> constant,
+                  Counting counting, bool immortal) {
+  return constant ? constants[std::to_underlying(counting)](*constant)
+                  : makeOperand(operand, counting, immortal);
+}
+
 // Each operand position holding operand consumed one of its references, and the
 // caller's reference kept its value. The result may be another reference to it.
+// An immortal operand keeps its zero count.
 void releaseShared(const BinaryCase &test, void *operand, const Integer &value,
-                   void *result) {
+                   void *result, bool immortal) {
   EXPECT_THAT(operand, Represents(value)) << "shared operand was modified";
   if (!Handle(operand).isImmediate())
-    EXPECT_EQ(references(operand, test.counting), 1u + (operand == result))
+    EXPECT_EQ(references(operand, test.counting),
+              immortal ? 0u : 1u + (operand == result))
         << "operand positions did not each consume one reference";
   releases[std::to_underlying(test.counting)](operand);
+}
+
+// Immortal operands are neither counted nor written, even when the result is
+// the same object. Those made here are then freed.
+void dropImmortal(const BinaryCase &test, void *operand, const Integer &value,
+                  bool constant) {
+  EXPECT_THAT(operand, Represents(value)) << "immortal operand was modified";
+  EXPECT_EQ(references(operand, test.counting), 0u)
+      << "immortal operand was counted";
+  if (!constant)
+    rcgmp_mpz_free(operand, test.counting == Counting::atomic);
 }
 
 void checkBinary(const BinaryCase &test) {
   SCOPED_TRACE(test.describe());
   std::size_t index = std::to_underlying(test.counting);
+  auto [sharing, immortal] = test.ownership;
   const Integer &lhs = test.lhs.value;
   const Integer &rhs = test.aliased ? lhs : test.rhs.value;
   AllocationCounter balance;
-  void *x = makeOperand(test.lhs, test.counting);
+  void *x =
+      makeOperand(test.lhs, test.lhsConstant, test.counting, immortal.lhs);
   void *y = x;
   if (test.aliased)
     EXPECT_EQ(retains[index](x), x);
   else
-    y = makeOperand(test.rhs, test.counting);
-  if (test.sharing.lhs)
+    y = makeOperand(test.rhs, test.rhsConstant, test.counting, immortal.rhs);
+  bool immortalX =
+      !Handle(x).isImmediate() && (test.lhsConstant || immortal.lhs);
+  bool immortalY =
+      y == x ? immortalX
+             : !Handle(y).isImmediate() && (test.rhsConstant || immortal.rhs);
+  if (sharing.lhs)
     EXPECT_EQ(retains[index](x), x);
-  if (test.sharing.rhs)
+  if (sharing.rhs)
     EXPECT_EQ(retains[index](y), y);
   Integer expected;
   operation(test.op).oracle(expected, lhs, rhs);
   AllocationCounter counter;
   void *result = operation(test.op).compiled[index](x, y);
   EXPECT_THAT(result, Represents(expected));
-  // General multiplication cannot write over its operands.
+  // General multiplication cannot write over its operands, and immortal ones
+  // are never written.
   bool reusable =
       test.op != Operator::muli || mpz_size(lhs) <= 1 || mpz_size(rhs) <= 1;
-  bool unique = !test.sharing.lhs && !test.sharing.rhs && !test.aliased;
-  if (test.roomy && unique && reusable && !Handle(result).isImmediate() &&
-      !(Handle(x).isImmediate() && Handle(y).isImmediate()))
+  bool unique = !sharing.lhs && !sharing.rhs && !test.aliased;
+  bool counted = (!Handle(x).isImmediate() && !immortalX) ||
+                 (!Handle(y).isImmediate() && !immortalY);
+  if (test.roomy && unique && reusable && counted &&
+      !Handle(result).isImmediate())
     EXPECT_EQ(counter.allocations(), 0u)
         << "result did not reuse a unique operand";
-  if (test.sharing.lhs)
-    releaseShared(test, x, lhs, result);
-  if (test.sharing.rhs)
-    releaseShared(test, y, rhs, result);
+  if (sharing.lhs)
+    releaseShared(test, x, lhs, result, immortalX);
+  if (sharing.rhs)
+    releaseShared(test, y, rhs, result, immortalY);
   releases[index](result);
+  if (immortalX)
+    dropImmortal(test, x, lhs, test.lhsConstant.has_value());
+  if (immortalY && y != x)
+    dropImmortal(test, y, rhs, test.rhsConstant.has_value());
   EXPECT_TRUE(balance.balanced())
       << "allocations and deallocations do not balance";
 }
@@ -237,10 +350,10 @@ void checkBinary(const BinaryCase &test) {
 void PairsMatchGmp(Operator op, Counting counting,
                    const std::pair<Integer, Integer> &operands,
                    std::size_t lhsSpare, std::size_t rhsSpare) {
-  for (Sharing sharing : sharings)
+  for (Ownership ownership : ownerships)
     checkBinary({op,
                  counting,
-                 sharing,
+                 ownership,
                  false,
                  {operands.first, lhsSpare},
                  {operands.second, rhsSpare},
@@ -252,29 +365,49 @@ FUZZ_TEST(Differential, PairsMatchGmp)
 
 void AliasesMatchGmp(Operator op, Counting counting, const Integer &value,
                      std::size_t spare) {
-  for (bool shared : {false, true})
-    checkBinary({op,
-                 counting,
-                 {.lhs = shared},
-                 true,
-                 {value, spare},
-                 {value, spare},
-                 false});
+  for (Ownership ownership : aliasOwnerships)
+    checkBinary(
+        {op, counting, ownership, true, {value, spare}, {value, spare}, false});
 }
 FUZZ_TEST(Differential, AliasesMatchGmp)
     .WithDomains(AnyOperator(), AnyCounting(), AnyInteger(), AnySpare());
 
+// A compiled constant replaces either operand.
+void ConstantsMatchGmp(Operator op, Counting counting, std::size_t constant,
+                       const Integer &other, std::size_t spare, bool left) {
+  Operand c{constantValue(constant)}, y{other, spare};
+  for (Ownership ownership : ownerships) {
+    BinaryCase test{op, counting, ownership, false, c, y, false};
+    if (left) {
+      test.lhsConstant = constant;
+    } else {
+      std::swap(test.lhs, test.rhs);
+      test.rhsConstant = constant;
+    }
+    checkBinary(test);
+  }
+}
+FUZZ_TEST(Differential, ConstantsMatchGmp)
+    .WithDomains(AnyOperator(), AnyCounting(), AnyConstant(), AnyInteger(),
+                 AnySpare(), fuzztest::Arbitrary<bool>());
+
+// A compiled constant, by index.
+struct Constant {
+  std::size_t index;
+};
+
 // A step of a chain applies an operation to the result so far and either a
-// fresh operand or one related to the result so far.
+// fresh operand, one related to the result so far, or a compiled constant.
 struct Step {
   Operator op;
-  std::variant<Integer, Relation> operand;
+  std::variant<Integer, Relation, Constant> operand;
   std::size_t spare;
 };
 
 // Each chain feeds every result into the next operation as its uniquely owned
 // lhs, so operands also carry the growth headroom and the stale limbs above the
-// magnitude that the runtime leaves behind, and come from earlier reuse.
+// magnitude that the runtime leaves behind, and come from earlier reuse. A
+// constant rhs may also come back as the result and become the next lhs.
 void ChainsMatchGmp(Counting counting, const Operand &start,
                     const std::vector<Step> &steps) {
   std::size_t index = std::to_underlying(counting);
@@ -286,9 +419,12 @@ void ChainsMatchGmp(Counting counting, const Operand &start,
     if (step.op == Operator::muli && mpz_sizeinbase(accumulator, 2) > 1000)
       continue;
     auto *relation = std::get_if<Relation>(&step.operand);
-    Integer operand =
-        relation ? (*relation)(accumulator) : std::get<Integer>(step.operand);
-    void *rhs = makeOperand({operand, step.spare}, counting);
+    auto *constant = std::get_if<Constant>(&step.operand);
+    Integer operand = relation   ? (*relation)(accumulator)
+                      : constant ? constantValue(constant->index)
+                                 : std::get<Integer>(step.operand);
+    void *rhs = constant ? constants[index](constant->index)
+                         : makeOperand({operand, step.spare}, counting);
     Integer expected;
     operation(step.op).oracle(expected, accumulator, operand);
     result = operation(step.op).compiled[index](result, rhs);
@@ -306,7 +442,9 @@ FUZZ_TEST(Differential, ChainsMatchGmp)
         AnyCounting(), fuzztest::StructOf<Operand>(AnyInteger(), AnySpare()),
         fuzztest::VectorOf(fuzztest::StructOf<Step>(
                                AnyOperator(),
-                               fuzztest::VariantOf(AnyInteger(), AnyRelation()),
+                               fuzztest::VariantOf(
+                                   AnyInteger(), AnyRelation(),
+                                   fuzztest::StructOf<Constant>(AnyConstant())),
                                AnySpare()))
             .WithMinSize(8)
             .WithMaxSize(16));
@@ -327,6 +465,23 @@ std::vector<Integer> boundaries() {
   for (unsigned exponent : {(word - 3) / 2, (word - 2) / 2, word - 1})
     addPair(exponent, 0);
   return values;
+}
+
+// Each compiled constant holds its value, and one outside the immediate range
+// is the same static object with a zero count on every call.
+TEST(Differential, ConstantsHoldTheirValues) {
+  for (Counting counting : countings) {
+    for (std::size_t i = 0; i < constantValues.size(); ++i) {
+      SCOPED_TRACE(std::format("constant {} ({})", constantValues[i],
+                               rcgmp::name(counting)));
+      void *value = constants[std::to_underlying(counting)](i);
+      EXPECT_THAT(value, Represents(constantValue(i)));
+      if (!Handle(value).isImmediate()) {
+        EXPECT_EQ(references(value, counting), 0u);
+        EXPECT_EQ(constants[std::to_underlying(counting)](i), value);
+      }
+    }
+  }
 }
 
 class DifferentialTest
@@ -355,12 +510,43 @@ TEST_P(DifferentialTest, MatchesGmpOnBoundaries) {
   for (std::size_t spare : {0, 4}) {
     for (const Integer &lhs : values) {
       Operand x{lhs, spare};
-      for (const auto &[rhs, sharing] :
-           std::views::cartesian_product(values, sharings))
-        checkBinary({op, counting, sharing, false, x, {rhs, spare}, spare > 0});
-      for (bool shared : {false, true})
-        checkBinary({op, counting, {.lhs = shared}, true, x, x, false});
+      for (const auto &[rhs, ownership] :
+           std::views::cartesian_product(values, ownerships))
+        checkBinary(
+            {op, counting, ownership, false, x, {rhs, spare}, spare > 0});
+      for (Ownership ownership : aliasOwnerships)
+        checkBinary({op, counting, ownership, true, x, x, false});
     }
+  }
+}
+
+// Constants against boundary operands on either side and each other.
+TEST_P(DifferentialTest, MatchesGmpOnConstants) {
+  std::vector<Integer> values = boundaries();
+  for (std::size_t i = 0; i < constantValues.size(); ++i) {
+    Operand c{constantValue(i)};
+    for (std::size_t spare : {0, 4}) {
+      for (const auto &[other, ownership] :
+           std::views::cartesian_product(values, ownerships)) {
+        Operand y{other, spare};
+        checkBinary({op, counting, ownership, false, c, y, spare > 0, i});
+        checkBinary(
+            {op, counting, ownership, false, y, c, spare > 0, std::nullopt, i});
+      }
+    }
+    for (std::size_t j = 0; j < constantValues.size(); ++j)
+      for (Ownership ownership : ownerships)
+        checkBinary({op,
+                     counting,
+                     ownership,
+                     false,
+                     c,
+                     {constantValue(j)},
+                     false,
+                     i,
+                     j});
+    for (Ownership ownership : aliasOwnerships)
+      checkBinary({op, counting, ownership, true, c, c, false, i});
   }
 }
 

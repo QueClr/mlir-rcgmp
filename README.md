@@ -15,7 +15,8 @@ is a distinction in the source type and does not change the handle's ABI.
 Ownership is explicit: `rcgmp.from_int` creates an owned reference,
 `rcgmp.retain` borrows a value and returns an additional owned reference, and
 `rcgmp.release` consumes one reference. Retains and releases of small integers
-are no-ops. Binary operations consume two references and return one owned result:
+and constants are no-ops. Binary operations consume two references and return
+one owned result:
 
 | Operation | Result |
 | --- | --- |
@@ -46,6 +47,16 @@ For example, doubling consumes the original reference and its retained alias:
 rcgmp.retain %integer : !rcgmp.mpz
 %twice = rcgmp.addi %integer, %integer : !rcgmp.mpz
 rcgmp.release %twice : !rcgmp.mpz
+```
+
+`rcgmp.constant` produces an integer of any width. Its result needs no
+reference counting: it may be consumed by any number of operations without
+`rcgmp.retain`, or by none without `rcgmp.release`. Equal constants can
+therefore be merged, and unused ones erased.
+
+```mlir
+%big = rcgmp.constant -340282366920938463463374607431768211456 : !rcgmp.mpz
+%square = rcgmp.muli %big, %big : !rcgmp.mpz
 ```
 
 ## Build
@@ -116,6 +127,22 @@ Nonatomic reference counts use ordinary loads/stores. Atomic retains use relaxed
 ordering, releases use release ordering, and final destruction performs an
 acquire fence. Reference-count overflow aborts. Atomic counting does not permit
 retaining a borrowed value after its last owning reference has been released.
+
+A heap object with a zero reference count is immortal, similar to persistent
+objects in [Lean](https://github.com/leanprover/lean4/blob/master/src/include/lean/lean.h).
+A counted object never has a zero count while it is referenced. Retain and
+release, in generated code and in the runtime, test the count before updating
+it and leave immortal objects unchanged; atomic counts are tested with a relaxed
+load. This costs one compare on the heap path. Uniqueness tests are false for
+immortal objects, so they are never reused in place and may reside in read-only
+memory.
+
+Constants in the immediate range lower to tagged bits through
+`rcgmp.bridge.mpz.from_bits`. Other constants lower to
+`rcgmp.bridge.mpz.immortal`, which addresses a private, read-only LLVM global
+holding an immortal heap object with the usual layout. The global's name is
+derived from the value, so equal constants in a module share one object in
+both reference-counting modes.
 
 Addition uses the unchecked `rcgmp.bridge.mpz.to_bits` and `from_bits`
 representation casts. The SCF pass uses `rcgmp.bridge.addsi_extended` for the

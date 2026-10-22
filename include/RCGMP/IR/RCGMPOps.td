@@ -19,6 +19,30 @@ def RCGMP_FromIntOp : RCGMPOp<"from_int", [RCGMP_NotSpeculatable]> {
   }];
 }
 
+def RCGMP_ConstantOp : RCGMPOp<"constant", [Pure]> {
+  let summary = "Produce an integer constant that needs no reference counting";
+  let description = [{
+    The value is a signed integer of arbitrary width. Its attribute uses the
+    narrowest signless integer type holding the value in two's complement, so
+    equal constants have equal attributes; the custom syntax chooses that type.
+    Values in the immediate range lower to tagged bits, and other values to a
+    static immortal heap object.
+
+    The result needs no reference counting: it may be consumed by any number of
+    operations without `rcgmp.retain`, or by none without `rcgmp.release`.
+    Retaining or releasing it has no effect.
+
+    ```mlir
+    %c = rcgmp.constant -340282366920938463463374607431768211456 : !rcgmp.mpz
+    ```
+  }];
+  let arguments = (ins APIntAttr:$value);
+  let results = (outs RCGMP_MpzType:$result);
+  let assemblyFormat = "custom<SignedInteger>($value) attr-dict `:` type($result)";
+  let builders = [OpBuilder<(ins "Type":$type, "const llvm::APInt &":$value)>];
+  let hasVerifier = 1;
+}
+
 def RCGMP_RetainOp : RCGMPOp<"retain", [RCGMP_NotSpeculatable]> {
   let summary = "Add one owned reference to an integer";
   let description = [{

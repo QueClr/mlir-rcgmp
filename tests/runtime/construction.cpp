@@ -105,6 +105,35 @@ TEST(Construction, CountsImmediatesWithoutAllocation) {
   release_local(x);
   EXPECT_EQ(counter.allocations(), 0u);
 }
+
+// A zero count marks an immortal integer; compiled and runtime reference
+// counting both leave it unchanged.
+class Immortal : public ::testing::TestWithParam<Counting> {};
+
+TEST_P(Immortal, CountingLeavesZeroCount) {
+  Counting counting = GetParam();
+  bool atomic = counting == Counting::atomic;
+  void *x = atomic ? from_atomic(std::numeric_limits<std::int64_t>::max())
+                   : from_signed(std::numeric_limits<std::int64_t>::max());
+  Handle(x).heap().references = 0;
+  AllocationCounter counter;
+  if (atomic) {
+    release_atomic(retain_atomic(x));
+    release_atomic(x);
+  } else {
+    release_local(retain_local(x));
+    release_local(x);
+  }
+  rcgmp_mpz_release(rcgmp_mpz_retain(x, atomic), atomic);
+  rcgmp_mpz_release(x, atomic);
+  EXPECT_EQ(references(x, counting), 0u);
+  EXPECT_EQ(counter.deallocations(), 0u);
+  EXPECT_THAT(x, Represents(Integer(std::numeric_limits<std::int64_t>::max())));
+  Handle(x).heap().references = 1;
+  rcgmp_mpz_release(x, atomic);
+}
+INSTANTIATE_TEST_SUITE_P(Construction, Immortal, ::testing::ValuesIn(countings),
+                         countingName);
 #endif
 
 } // namespace

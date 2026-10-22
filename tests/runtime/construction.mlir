@@ -29,9 +29,14 @@ func.func @from_atomic(%x: i64) -> !rcgmp.mpz<atomic> {
 // SCF-LABEL: func.func @retain_local
 // SCF: rcgmp.bridge.mpz.is_immediate
 // SCF: scf.if
+// SCF: rcgmp.bridge.mpz.is_immortal
+// SCF: scf.if
 // SCF: rcgmp.bridge.mpz.inc_ref
 // SCF: cf.assert
 // LLVM-LABEL: llvm.func @retain_local
+// LLVM: llvm.load
+// LLVM: llvm.icmp "eq"
+// LLVM: llvm.cond_br
 // LLVM: llvm.load
 // LLVM: llvm.add
 // LLVM: llvm.store
@@ -40,6 +45,7 @@ func.func @retain_local(%x: !rcgmp.mpz) -> !rcgmp.mpz {
   return %x : !rcgmp.mpz
 }
 // LLVM-LABEL: llvm.func @retain_atomic
+// LLVM: llvm.load {{.*}} atomic monotonic
 // LLVM: llvm.atomicrmw add {{.*}} monotonic
 func.func @retain_atomic(%x: !rcgmp.mpz<atomic>) -> !rcgmp.mpz<atomic> {
   rcgmp.retain %x : !rcgmp.mpz<atomic>
@@ -47,6 +53,7 @@ func.func @retain_atomic(%x: !rcgmp.mpz<atomic>) -> !rcgmp.mpz<atomic> {
 }
 // SCF-LABEL: func.func @release_local
 // SCF: rcgmp.bridge.mpz.is_immediate
+// SCF: rcgmp.bridge.mpz.is_immortal
 // SCF: rcgmp.bridge.mpz.dec_ref
 // SCF: scf.if
 // SCF: rcgmp.bridge.mpz.free
@@ -60,6 +67,7 @@ func.func @release_local(%x: !rcgmp.mpz) {
   return
 }
 // LLVM-LABEL: llvm.func @release_atomic
+// LLVM: llvm.load {{.*}} atomic monotonic
 // LLVM: llvm.atomicrmw sub {{.*}} release
 // LLVM: llvm.call @rcgmp_mpz_free
 func.func @release_atomic(%x: !rcgmp.mpz<atomic>) {

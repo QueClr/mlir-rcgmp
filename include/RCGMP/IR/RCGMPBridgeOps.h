@@ -11,4 +11,12 @@
 #define GET_OP_CLASSES
 #include "RCGMP/IR/RCGMPBridgeOps.h.inc"
 
+namespace mlir::rcgmp::bridge {
+
+/// Return whether a handle of the given bit width holds the value as a tagged
+/// immediate.
+bool fitsImmediate(const llvm::APInt &value, unsigned handleWidth);
+
+} // namespace mlir::rcgmp::bridge
+
 #endif

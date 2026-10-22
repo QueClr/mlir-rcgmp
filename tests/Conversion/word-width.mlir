@@ -1,5 +1,47 @@
 // RUN: %rcgmp-opt %s -convert-rcgmp-to-scf -convert-scf-to-cf -convert-to-llvm='dynamic' -reconcile-unrealized-casts | %FileCheck %s
 module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<!llvm.ptr, dense<32> : vector<4xi64>>, #dlti.dl_entry<index, 16 : i64>>} {
+  // CHECK-DAG: llvm.mlir.global private unnamed_addr constant @__rcgmp_mpz_20000000(dense<[0, 1, 1, 536870912]> : tensor<4xi32>) {addr_space = 0 : i32, alignment = 4 : i64} : !llvm.array<4 x i32>
+  // CHECK-DAG: llvm.mlir.global private unnamed_addr constant @__rcgmp_mpz_neg_20000001(dense<[0, -1, 1, 536870913]> : tensor<4xi32>) {addr_space = 0 : i32, alignment = 4 : i64} : !llvm.array<4 x i32>
+  // CHECK-DAG: llvm.mlir.global private unnamed_addr constant @__rcgmp_mpz_80000000(dense<[0, 1, 1, -2147483648]> : tensor<4xi32>) {addr_space = 0 : i32, alignment = 4 : i64} : !llvm.array<4 x i32>
+  // CHECK-DAG: llvm.mlir.global private unnamed_addr constant @__rcgmp_mpz_neg_100000000(dense<[0, -2, 2, 0, 1]> : tensor<5xi32>) {addr_space = 0 : i32, alignment = 4 : i64} : !llvm.array<5 x i32>
+  // CHECK-DAG: llvm.mlir.global private unnamed_addr constant @__rcgmp_mpz_300000002(dense<[0, 2, 2, 2, 3]> : tensor<5xi32>) {addr_space = 0 : i32, alignment = 4 : i64} : !llvm.array<5 x i32>
+  // CHECK-DAG: llvm.mlir.global private unnamed_addr constant @__rcgmp_mpz_2000000000000000(dense<[0, 2, 2, 0, 536870912]> : tensor<5xi32>) {addr_space = 0 : i32, alignment = 4 : i64} : !llvm.array<5 x i32>
+  // CHECK-LABEL: llvm.func @constants
+  // CHECK: llvm.mlir.constant(2147483645 : i32)
+  // CHECK: llvm.mlir.addressof @__rcgmp_mpz_20000000
+  // CHECK: llvm.mlir.constant(-2147483647 : i32)
+  // CHECK: llvm.mlir.addressof @__rcgmp_mpz_neg_20000001
+  func.func @constants() -> (!rcgmp.mpz, !rcgmp.mpz, !rcgmp.mpz, !rcgmp.mpz) {
+    %max = rcgmp.constant 536870911 : !rcgmp.mpz
+    %above = rcgmp.constant 536870912 : !rcgmp.mpz
+    %min = rcgmp.constant -536870912 : !rcgmp.mpz
+    %below = rcgmp.constant -536870913 : !rcgmp.mpz
+    return %max, %above, %min, %below : !rcgmp.mpz, !rcgmp.mpz, !rcgmp.mpz, !rcgmp.mpz
+  }
+  // Limbs follow the handle width, so 2^61 needs two of them.
+  // CHECK-LABEL: llvm.func @limbs
+  // CHECK: llvm.mlir.addressof @__rcgmp_mpz_80000000
+  // CHECK: llvm.mlir.addressof @__rcgmp_mpz_neg_100000000
+  // CHECK: llvm.mlir.addressof @__rcgmp_mpz_300000002
+  // CHECK: llvm.mlir.addressof @__rcgmp_mpz_2000000000000000
+  func.func @limbs() -> (!rcgmp.mpz, !rcgmp.mpz, !rcgmp.mpz, !rcgmp.mpz) {
+    %a = rcgmp.constant 2147483648 : !rcgmp.mpz
+    %b = rcgmp.constant -4294967296 : !rcgmp.mpz
+    %c = rcgmp.constant 0x300000002 : !rcgmp.mpz
+    %d = rcgmp.constant 2305843009213693952 : !rcgmp.mpz
+    return %a, %b, %c, %d : !rcgmp.mpz, !rcgmp.mpz, !rcgmp.mpz, !rcgmp.mpz
+  }
+  // Narrow attributes are sign-extended to the handle width.
+  // CHECK-LABEL: llvm.func @negatives
+  // CHECK: %[[A:.*]] = llvm.mlir.constant(-3 : i32)
+  // CHECK: llvm.inttoptr %[[A]] : i32 to !llvm.ptr
+  // CHECK: %[[B:.*]] = llvm.mlir.constant(-19 : i32)
+  // CHECK: llvm.inttoptr %[[B]] : i32 to !llvm.ptr
+  func.func @negatives() -> (!rcgmp.mpz, !rcgmp.mpz) {
+    %a = rcgmp.constant -1 : !rcgmp.mpz
+    %b = rcgmp.constant -5 : !rcgmp.mpz
+    return %a, %b : !rcgmp.mpz, !rcgmp.mpz
+  }
   // CHECK-LABEL: llvm.func @make
   // CHECK: llvm.alloca {{.*}} x i32
   // CHECK: llvm.mlir.constant(536870911 : i64)
@@ -12,10 +54,21 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<!llvm.ptr, dense<
   }
   // CHECK-LABEL: llvm.func @retain
   // CHECK: llvm.ptrtoint {{.*}} : !llvm.ptr to i32
+  // CHECK: llvm.load {{.*}} atomic monotonic {{.*}} : !llvm.ptr -> i32
   // CHECK: llvm.atomicrmw add {{.*}} monotonic : !llvm.ptr, i32
   func.func @retain(%x: !rcgmp.mpz<atomic>) -> !rcgmp.mpz<atomic> {
     rcgmp.retain %x : !rcgmp.mpz<atomic>
     return %x : !rcgmp.mpz<atomic>
+  }
+  // CHECK-LABEL: llvm.func @release
+  // CHECK: %[[COUNT:.*]] = llvm.load %arg0 : !llvm.ptr -> i32
+  // CHECK: %[[ZERO:.*]] = llvm.mlir.constant(0 : i32)
+  // CHECK: llvm.icmp "eq" %[[COUNT]], %[[ZERO]]
+  // CHECK: llvm.cond_br
+  // CHECK: llvm.sub {{.*}} : i32
+  func.func @release(%x: !rcgmp.mpz) {
+    rcgmp.release %x : !rcgmp.mpz
+    return
   }
   // CHECK-LABEL: llvm.func @add
   // CHECK: "llvm.intr.sadd.with.overflow"{{.*}} : (i32, i32) -> !llvm.struct<(i32, i1)>
