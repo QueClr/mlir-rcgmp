@@ -17,15 +17,15 @@
 // LLVM: llvm.inttoptr
 // LLVM: llvm.call @rcgmp_mpz_from_word({{.*}}) : (i64, i32, i32) -> !llvm.ptr
 func.func @from_signed(%x: i64) -> !rcgmp.mpz {
-  %r = rcgmp.from_int %x : i64 to !rcgmp.mpz
+  %r = rcgmp.extsi %x : i64 to !rcgmp.mpz
   return %r : !rcgmp.mpz
 }
 func.func @from_unsigned(%x: i64) -> !rcgmp.mpz {
-  %r = rcgmp.from_int %x unsigned : i64 to !rcgmp.mpz
+  %r = rcgmp.extui %x : i64 to !rcgmp.mpz
   return %r : !rcgmp.mpz
 }
 func.func @from_atomic(%x: i64) -> !rcgmp.mpz<atomic> {
-  %r = rcgmp.from_int %x : i64 to !rcgmp.mpz<atomic>
+  %r = rcgmp.extsi %x : i64 to !rcgmp.mpz<atomic>
   return %r : !rcgmp.mpz<atomic>
 }
 // SCF-LABEL: func.func @retain_local
@@ -82,21 +82,21 @@ func.func @release_atomic(%x: !rcgmp.mpz<atomic>) {
 // LLVM: llvm.call @rcgmp_mpz_from_words
 func.func @from_min129() -> !rcgmp.mpz {
   %x = arith.constant -340282366920938463463374607431768211456 : i129
-  %r = rcgmp.from_int %x : i129 to !rcgmp.mpz
+  %r = rcgmp.extsi %x : i129 to !rcgmp.mpz
   return %r : !rcgmp.mpz
 }
 func.func @from_max129() -> !rcgmp.mpz {
   %x = arith.constant 680564733841876926926749214863536422911 : i129
-  %r = rcgmp.from_int %x unsigned : i129 to !rcgmp.mpz
+  %r = rcgmp.extui %x : i129 to !rcgmp.mpz
   return %r : !rcgmp.mpz
 }
 func.func @from_signed_i1() -> !rcgmp.mpz {
   %x = arith.constant true
-  %r = rcgmp.from_int %x : i1 to !rcgmp.mpz
+  %r = rcgmp.extsi %x : i1 to !rcgmp.mpz
   return %r : !rcgmp.mpz
 }
 func.func @from_unsigned_i1() -> !rcgmp.mpz {
   %x = arith.constant true
-  %r = rcgmp.from_int %x unsigned : i1 to !rcgmp.mpz
+  %r = rcgmp.extui %x : i1 to !rcgmp.mpz
   return %r : !rcgmp.mpz
 }

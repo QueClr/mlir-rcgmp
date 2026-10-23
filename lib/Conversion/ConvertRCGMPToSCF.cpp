@@ -16,28 +16,31 @@
 namespace mlir::rcgmp {
 namespace {
 
-struct FromIntLowering : OpRewritePattern<FromIntOp> {
-  using OpRewritePattern::OpRewritePattern;
-  LogicalResult matchAndRewrite(FromIntOp op,
+template <typename ExtendOp, bool isUnsigned>
+struct ExtendLowering : OpRewritePattern<ExtendOp> {
+  using OpRewritePattern<ExtendOp>::OpRewritePattern;
+  LogicalResult matchAndRewrite(ExtendOp op,
                                 PatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
     auto fits = bridge::MpzFitsImmediateOp::create(rewriter, loc, op.getValue(),
-                                                   op.getIsUnsigned());
+                                                   isUnsigned);
     auto result =
         scf::IfOp::create(rewriter, loc, TypeRange{op.getType()}, fits,
                           /*withElseRegion=*/true);
     rewriter.setInsertionPointToStart(&result.getThenRegion().front());
     auto immediate = bridge::MpzFromImmediateOp::create(
-        rewriter, loc, op.getType(), op.getValue(), op.getIsUnsigned());
+        rewriter, loc, op.getType(), op.getValue(), isUnsigned);
     scf::YieldOp::create(rewriter, loc, immediate.getResult());
     rewriter.setInsertionPointToStart(&result.getElseRegion().front());
     auto heap = bridge::MpzPromoteOp::create(rewriter, loc, op.getType(),
-                                             op.getValue(), op.getIsUnsigned());
+                                             op.getValue(), isUnsigned);
     scf::YieldOp::create(rewriter, loc, heap.getResult());
     rewriter.replaceOp(op, result.getResults());
     return success();
   }
 };
+using ExtSILowering = ExtendLowering<ExtSIOp, false>;
+using ExtUILowering = ExtendLowering<ExtUIOp, true>;
 
 struct ConstantLowering : OpRewritePattern<ConstantOp> {
   using OpRewritePattern::OpRewritePattern;
@@ -717,21 +720,20 @@ struct ConvertRCGMPToSCFPass
   }
   void runOnOperation() override {
     RewritePatternSet patterns(&getContext());
-    patterns
-        .add<ConstantLowering, FromIntLowering, RetainLowering, ReleaseLowering,
-             AddILowering, SubILowering, MulILowering, AndILowering,
-             XOrILowering, OrILowering, NotILowering, NegILowering,
-             AbsILowering, ShLILowering, ShRSILowering, DivSILowering,
-             RemSILowering, FloorDivSILowering, FloorModSILowering,
-             DivRemSILowering, FloorDivModSILowering, CmpILowering>(
-            &getContext());
+    patterns.add<ConstantLowering, ExtSILowering, ExtUILowering, RetainLowering,
+                 ReleaseLowering, AddILowering, SubILowering, MulILowering,
+                 AndILowering, XOrILowering, OrILowering, NotILowering,
+                 NegILowering, AbsILowering, ShLILowering, ShRSILowering,
+                 DivSILowering, RemSILowering, FloorDivSILowering,
+                 FloorModSILowering, DivRemSILowering, FloorDivModSILowering,
+                 CmpILowering>(&getContext());
     populateMatchLoweringPatterns(patterns);
     ConversionTarget target(getContext());
-    target.addIllegalOp<ConstantOp, FromIntOp, RetainOp, ReleaseOp, AddIOp,
-                        SubIOp, MulIOp, AndIOp, XOrIOp, OrIOp, NotIOp, NegIOp,
-                        AbsIOp, ShLIOp, ShRSIOp, DivSIOp, RemSIOp, FloorDivSIOp,
-                        FloorModSIOp, DivRemSIOp, FloorDivModSIOp, CmpIOp,
-                        MatchOp, YieldOp>();
+    target.addIllegalOp<ConstantOp, ExtSIOp, ExtUIOp, RetainOp, ReleaseOp,
+                        AddIOp, SubIOp, MulIOp, AndIOp, XOrIOp, OrIOp, NotIOp,
+                        NegIOp, AbsIOp, ShLIOp, ShRSIOp, DivSIOp, RemSIOp,
+                        FloorDivSIOp, FloorModSIOp, DivRemSIOp, FloorDivModSIOp,
+                        CmpIOp, MatchOp, YieldOp>();
     target.markUnknownOpDynamicallyLegal([](Operation *) { return true; });
     if (failed(applyPartialConversion(getOperation(), target,
                                       std::move(patterns))))

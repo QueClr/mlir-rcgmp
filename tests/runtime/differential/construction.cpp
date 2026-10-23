@@ -1,4 +1,4 @@
-// Compares integers that compiled from_int and constants, and the runtime
+// Compares integers that compiled extsi, extui, and constants, and the runtime
 // constructor, produce with GMP.
 #include "RCGMP/Runtime/Mpz.h"
 #include <fuzztest/fuzztest.h>
@@ -64,7 +64,7 @@ template <auto entry> void *passWords(const Words &words) {
 // ceil(width / 64) 64-bit words, least significant first. The widths cover
 // each way of deciding whether a value is immediate, and operands of one, two,
 // and three words.
-struct FromInt {
+struct Extension {
   std::string_view name;
   unsigned width;
   bool isUnsigned;
@@ -72,7 +72,7 @@ struct FromInt {
   void *(*apply)(const Words &);
 };
 
-constexpr std::array<FromInt, 18> fromInts{{
+constexpr std::array<Extension, 18> extensions{{
     {"from_signed_i61", 61, false, Counting::nonatomic,
      passWords<from_signed_i61_local>},
     {"from_unsigned_i61", 61, true, Counting::nonatomic,
@@ -113,7 +113,7 @@ constexpr std::array<FromInt, 18> fromInts{{
 
 // Passes the low words of input, which the entry point truncates further to
 // the operand width.
-void checkFromInt(const FromInt &from, const Integer &input) {
+void checkExtension(const Extension &from, const Integer &input) {
   unsigned count = (from.width + 63) / 64;
   Integer expected;
   mpz_fdiv_r_2exp(expected, input, 64 * count);
@@ -134,27 +134,27 @@ void checkFromInt(const FromInt &from, const Integer &input) {
 
 // Values near the immediate bounds, word boundaries, and the operand width,
 // with long runs of ones and zeros, and bits above the operand width.
-fuzztest::Domain<Integer> AnyFromIntInput(unsigned width) {
+fuzztest::Domain<Integer> AnyExtensionInput(unsigned width) {
   return fuzztest::OneOf(
       NearPowersOfTwo({word - 3, word - 2, word - 1, word, width - 1, width}),
       AnyWords((width + 63) / 64 + 1));
 }
 
-void FromIntMatchesGmp(const std::pair<std::size_t, Integer> &test) {
-  checkFromInt(fromInts[test.first], test.second);
+void ExtensionMatchesGmp(const std::pair<std::size_t, Integer> &test) {
+  checkExtension(extensions[test.first], test.second);
 }
-FUZZ_TEST(Differential, FromIntMatchesGmp)
+FUZZ_TEST(Differential, ExtensionMatchesGmp)
     .WithDomains(fuzztest::FlatMap(
         [](std::size_t index) {
           return fuzztest::PairOf(fuzztest::Just(index),
-                                  AnyFromIntInput(fromInts[index].width));
+                                  AnyExtensionInput(extensions[index].width));
         },
-        fuzztest::InRange<std::size_t>(0, fromInts.size() - 1)));
+        fuzztest::InRange<std::size_t>(0, extensions.size() - 1)));
 
-class FromIntTest : public ::testing::TestWithParam<FromInt> {};
+class ExtensionTest : public ::testing::TestWithParam<Extension> {};
 
-INSTANTIATE_TEST_SUITE_P(Widths, FromIntTest, ::testing::ValuesIn(fromInts),
-                         [](const ::testing::TestParamInfo<FromInt> &info) {
+INSTANTIATE_TEST_SUITE_P(Widths, ExtensionTest, ::testing::ValuesIn(extensions),
+                         [](const ::testing::TestParamInfo<Extension> &info) {
                            return std::string(info.param.name) + "_" +
                                   std::string(rcgmp::name(info.param.counting));
                          });
@@ -163,7 +163,7 @@ INSTANTIATE_TEST_SUITE_P(Widths, FromIntTest, ::testing::ValuesIn(fromInts),
 // 2^(word-2), 2^(word-1), and 2^word; powers of two at two-word boundaries;
 // and the operand width's signed minimum and maximum and unsigned maximum.
 // Inputs wider than the operand are truncated.
-TEST_P(FromIntTest, MatchesGmpOnBoundaries) {
+TEST_P(ExtensionTest, MatchesGmpOnBoundaries) {
   unsigned width = GetParam().width;
   struct Point {
     unsigned exponent;
@@ -181,7 +181,7 @@ TEST_P(FromIntTest, MatchesGmpOnBoundaries) {
   };
   for (auto [exponent, delta, negate] : grid) {
     Integer input = Integer::powerOfTwo(exponent) + delta;
-    checkFromInt(GetParam(), negate ? -input : input);
+    checkExtension(GetParam(), negate ? -input : input);
   }
 }
 

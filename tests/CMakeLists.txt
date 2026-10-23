@@ -110,7 +110,7 @@ add_executable(rcgmp-differential
   ${CMAKE_CURRENT_BINARY_DIR}/runtime/compare.o)
 target_sources(rcgmp-differential PRIVATE FILE_SET CXX_MODULES FILES
   runtime/differential/Differential.cppm)
-foreach(name binary constant counting division from-int match shift
+foreach(name binary constant counting division extend match shift
     unary)
   rcgmp_lower_mlir(runtime/differential/${name}.mlir object)
   target_sources(rcgmp-differential PRIVATE ${object})

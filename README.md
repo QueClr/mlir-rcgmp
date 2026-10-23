@@ -12,7 +12,7 @@ Both types lower to `!llvm.ptr` in address space zero. Their size, ABI alignment
 and preferred alignment follow the pointer data layout. Reference-counting mode
 is a distinction in the source type and does not change the handle's ABI.
 
-Ownership is explicit: `rcgmp.from_int` creates an owned reference,
+Ownership is explicit: `rcgmp.extsi` creates an owned reference,
 `rcgmp.retain` borrows a value and returns an additional owned reference, and
 `rcgmp.release` consumes one reference. Retains and releases of small integers
 and constants are no-ops. Binary operations consume two references and return
@@ -30,16 +30,16 @@ Both operands and the result must have the same reference-counting mode.
 Aliased heap operands require one owned reference per operand position.
 
 ```mlir
-%integer = rcgmp.from_int %input : i64 to !rcgmp.mpz
+%integer = rcgmp.extsi %input : i64 to !rcgmp.mpz
 rcgmp.retain %integer : !rcgmp.mpz
 rcgmp.release %integer : !rcgmp.mpz
 rcgmp.release %integer : !rcgmp.mpz
 ```
 
-`from_int` accepts any signless integer width. It interprets the bits as signed
-two's complement by default; `rcgmp.from_int %x unsigned : i64 to !rcgmp.mpz`
-uses unsigned interpretation. Atomicity must remain consistent for all aliases.
-Ownership is a caller contract; the dialect does not yet verify linear use.
+`rcgmp.extsi` and `rcgmp.extui` accept any signless integer width, and
+interpret the bits as signed two's complement and as unsigned, respectively.
+Atomicity must remain consistent for all aliases. Ownership is a caller
+contract; the dialect does not yet verify linear use.
 
 For example, doubling consumes the original reference and its retained alias:
 

@@ -30,7 +30,7 @@ RCGMP_ENTRY(void *, absi, void *)
 RCGMP_ENTRY(void *, shli, void *, std::int64_t)
 RCGMP_ENTRY(void *, shrsi, void *, std::int64_t)
 RCGMP_ENTRY(std::int32_t, cmpi, void *, void *)
-RCGMP_ENTRY(void *, from_int, std::int64_t)
+RCGMP_ENTRY(void *, extsi, std::int64_t)
 RCGMP_ENTRY(void *, retain, void *)
 RCGMP_ENTRY(void, release, void *)
 #undef RCGMP_ENTRY
@@ -452,11 +452,11 @@ void registerOthers() {
                                        benchmark::DoNotOptimize(compare(x, y));
                                      }
                                    });
-    auto make = counting ? from_int_atomic : from_int;
+    auto make = counting ? extsi_atomic : extsi;
     Counted counted = countings[counting];
     for (auto [label, value] : {std::pair{"/immediate", std::int64_t(12345)},
                                 {"/heap", std::int64_t(1) << 62}})
-      benchmark::RegisterBenchmark("from_int" + suffix + label,
+      benchmark::RegisterBenchmark("extsi" + suffix + label,
                                    [=](benchmark::State &state) {
                                      for (auto _ : state) {
                                        std::int64_t v = value;

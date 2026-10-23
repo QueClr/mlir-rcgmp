@@ -10,16 +10,23 @@ include "mlir/Interfaces/ControlFlowInterfaces.td"
 // A consumed reference may be decremented, reused, or freed.
 defvar RCGMP_ConsumedEffects = [MemRead, MemWrite, MemFree];
 
-def RCGMP_FromIntOp : RCGMPOp<"from_int", [RCGMP_NotSpeculatable]> {
-  let arguments = (ins AnySignlessInteger:$value, UnitAttr:$isUnsigned);
+class RCGMP_ExtendOp<string name, string interpretation>
+    : RCGMPOp<name, [RCGMP_NotSpeculatable]> {
+  let arguments = (ins AnySignlessInteger:$value);
   let results = (outs Res<RCGMP_MpzType, "new integer", [MemAlloc]>:$result);
-  let assemblyFormat = "$value (`unsigned` $isUnsigned^)? attr-dict `:` type($value) `to` type($result)";
-
-  let summary = "Create one owned integer from a fixed-width integer";
+  let assemblyFormat = "$value attr-dict `:` type($value) `to` type($result)";
   let description = [{
-    Interpret the input as signed two's complement unless `unsigned` is present.
-    The result owns one reference. Inputs of any integer bit width are accepted.
+    The input is interpreted as }] # interpretation # [{, of any
+    integer bit width. The result owns one reference.
   }];
+}
+
+def RCGMP_ExtSIOp : RCGMP_ExtendOp<"extsi", "signed two's complement"> {
+  let summary = "Create one owned integer by sign-extending a fixed-width integer";
+}
+
+def RCGMP_ExtUIOp : RCGMP_ExtendOp<"extui", "unsigned"> {
+  let summary = "Create one owned integer by zero-extending a fixed-width integer";
 }
 
 def RCGMP_ConstantOp : RCGMPOp<"constant", [Pure]> {
