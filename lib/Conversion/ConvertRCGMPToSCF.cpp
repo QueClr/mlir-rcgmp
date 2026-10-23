@@ -564,6 +564,190 @@ struct FloorDivModSILowering
   }
 };
 
+// An integer truncated to a fixed width, and with withOverflow, whether it
+// lies outside the signed or unsigned range of that width.
+struct Truncation {
+  Value value;
+  Value overflow;
+};
+
+// Truncates the immediate in tagged bits. flags, which the integer satisfies,
+// carry over to the truncation.
+Truncation truncateImmediate(PatternRewriter &rewriter, Location loc,
+                             Value bits, IntegerType type, bool isUnsigned,
+                             bool withOverflow,
+                             arith::IntegerOverflowFlags flags) {
+  unsigned word = cast<IntegerType>(bits.getType()).getWidth();
+  unsigned width = type.getWidth();
+  auto two = arith::ConstantIntOp::create(rewriter, loc, 2, word);
+  Value x = arith::ShRSIOp::create(rewriter, loc, bits, two);
+  Value value = x;
+  if (width < word)
+    value = arith::TruncIOp::create(rewriter, loc, type, x, flags);
+  else if (width > word)
+    value = arith::ExtSIOp::create(rewriter, loc, type, x);
+  if (!withOverflow)
+    return {value, nullptr};
+  // An immediate has word - 2 signed bits, and word - 3 bits when nonnegative.
+  Value overflow;
+  if (width >= word - (isUnsigned ? 3 : 2)) {
+    overflow = isUnsigned
+                   ? Value(arith::CmpIOp::create(
+                         rewriter, loc, arith::CmpIPredicate::slt, x,
+                         arith::ConstantIntOp::create(rewriter, loc, 0, word)))
+                   : arith::ConstantIntOp::create(rewriter, loc, 0, 1);
+  } else {
+    Value back =
+        isUnsigned
+            ? Value(arith::ExtUIOp::create(rewriter, loc, x.getType(), value))
+            : arith::ExtSIOp::create(rewriter, loc, x.getType(), value);
+    overflow =
+        arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::ne, back, x);
+  }
+  return {value, overflow};
+}
+
+// Truncates a heap integer from the limbs that the result width covers.
+Truncation truncateHeap(PatternRewriter &rewriter, Location loc, Value integer,
+                        IntegerType word, IntegerType type, bool isUnsigned,
+                        bool withOverflow) {
+  unsigned limbBits = word.getWidth(), width = type.getWidth();
+  unsigned limbs = llvm::divideCeil(width, limbBits);
+  auto wide = rewriter.getIntegerType(limbs * limbBits);
+  auto constant = [&](IntegerType type, const APInt &value) -> Value {
+    return arith::ConstantOp::create(rewriter, loc,
+                                     rewriter.getIntegerAttr(type, value));
+  };
+  Value size = bridge::MpzSizeOp::create(rewriter, loc, word, integer);
+  Value zero = constant(word, APInt(limbBits, 0));
+  auto negative = arith::CmpIOp::create(rewriter, loc,
+                                        arith::CmpIPredicate::slt, size, zero);
+  Value count = arith::SelectOp::create(
+      rewriter, loc, negative, arith::SubIOp::create(rewriter, loc, zero, size),
+      size);
+  // A heap integer has at least one limb, and a limb exists only below the
+  // count.
+  Value magnitude;
+  for (unsigned i = 0; i < limbs; ++i) {
+    Value index = arith::ConstantIndexOp::create(rewriter, loc, i);
+    Value limb;
+    if (!i) {
+      limb = bridge::MpzLimbOp::create(rewriter, loc, word, integer, index);
+    } else {
+      auto present =
+          arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::ugt, count,
+                                constant(word, APInt(limbBits, i)));
+      auto branch = scf::IfOp::create(rewriter, loc, TypeRange{word}, present,
+                                      /*withElseRegion=*/true);
+      rewriter.setInsertionPointToStart(&branch.getThenRegion().front());
+      scf::YieldOp::create(rewriter, loc,
+                           ValueRange{bridge::MpzLimbOp::create(
+                               rewriter, loc, word, integer, index)});
+      rewriter.setInsertionPointToStart(&branch.getElseRegion().front());
+      scf::YieldOp::create(rewriter, loc, ValueRange{zero});
+      rewriter.setInsertionPointAfter(branch);
+      limb = branch.getResult(0);
+    }
+    if (limbs > 1)
+      limb = arith::ExtUIOp::create(rewriter, loc, wide, limb);
+    if (i)
+      limb = arith::ShLIOp::create(
+          rewriter, loc, limb,
+          constant(wide, APInt(wide.getWidth(), i * limbBits)));
+    magnitude = i ? arith::OrIOp::create(rewriter, loc, magnitude, limb) : limb;
+  }
+  Value wideZero = constant(wide, APInt(wide.getWidth(), 0));
+  Value value = arith::SelectOp::create(
+      rewriter, loc, negative,
+      arith::SubIOp::create(rewriter, loc, wideZero, magnitude), magnitude);
+  if (width < wide.getWidth())
+    value = arith::TruncIOp::create(rewriter, loc, type, value);
+  if (!withOverflow)
+    return {value, nullptr};
+  // The magnitude is exact unless the integer has more limbs than were read.
+  Value overflow =
+      arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::ugt, count,
+                            constant(word, APInt(limbBits, limbs)));
+  Value outside;
+  if (isUnsigned) {
+    outside = negative;
+    if (width < wide.getWidth()) {
+      auto above = arith::CmpIOp::create(
+          rewriter, loc, arith::CmpIPredicate::uge, magnitude,
+          constant(wide, APInt::getOneBitSet(wide.getWidth(), width)));
+      outside = arith::OrIOp::create(rewriter, loc, outside, above);
+    }
+  } else {
+    // A negative magnitude may reach 2^(width - 1), a nonnegative one not.
+    Value limit =
+        constant(wide, APInt::getOneBitSet(wide.getWidth(), width - 1));
+    auto above = arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::ugt,
+                                       magnitude, limit);
+    auto reaches = arith::CmpIOp::create(
+        rewriter, loc, arith::CmpIPredicate::uge, magnitude, limit);
+    outside = arith::SelectOp::create(rewriter, loc, negative, above, reaches);
+  }
+  overflow = arith::OrIOp::create(rewriter, loc, overflow, outside);
+  return {value, overflow};
+}
+
+// Lowers rcgmp.trunci and rcgmp.trunci_overflow inline, reading immediate bits
+// or heap limbs.
+template <typename TruncOp>
+struct TruncationLowering : OpRewritePattern<TruncOp> {
+  using OpRewritePattern<TruncOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(TruncOp op,
+                                PatternRewriter &rewriter) const override {
+    constexpr bool withOverflow = std::is_same_v<TruncOp, TruncIOverflowOp>;
+    auto loc = op.getLoc();
+    auto type = cast<IntegerType>(op.getResult().getType());
+    Value integer = op.getValue();
+    unsigned width = DataLayout::closest(op)
+                         .getTypeSizeInBits(integer.getType())
+                         .getFixedValue();
+    auto word = rewriter.getIntegerType(width);
+    bool isUnsigned = false;
+    auto flags = arith::IntegerOverflowFlags::none;
+    if constexpr (withOverflow)
+      isUnsigned = op.getIsUnsigned();
+    else
+      flags = op.getOverflowFlags();
+    Value bits = bridge::MpzToBitsOp::create(rewriter, loc, word, integer);
+    // Canonical integers that fit word - 2 signed bits, or word - 3 unsigned
+    // ones, are immediate, so a flag promising such a fit rules out the heap.
+    bool nsw = bitEnumContainsAll(flags, arith::IntegerOverflowFlags::nsw);
+    bool nuw = bitEnumContainsAll(flags, arith::IntegerOverflowFlags::nuw);
+    if ((nsw && type.getWidth() <= width - 2) ||
+        (nuw && type.getWidth() <= width - 3)) {
+      rewriter.replaceOp(
+          op, truncateImmediate(rewriter, loc, bits, type, false, false, flags)
+                  .value);
+      return success();
+    }
+    SmallVector<Type> types{type};
+    if (withOverflow)
+      types.push_back(rewriter.getI1Type());
+    auto immediate = bridge::MpzIsImmediateOp::create(rewriter, loc, integer);
+    auto branch = scf::IfOp::create(rewriter, loc, types, immediate,
+                                    /*withElseRegion=*/true);
+    auto yield = [&](Truncation truncation) {
+      SmallVector<Value> results{truncation.value};
+      if (withOverflow)
+        results.push_back(truncation.overflow);
+      scf::YieldOp::create(rewriter, loc, results);
+    };
+    rewriter.setInsertionPointToStart(&branch.getThenRegion().front());
+    yield(truncateImmediate(rewriter, loc, bits, type, isUnsigned, withOverflow,
+                            flags));
+    rewriter.setInsertionPointToStart(&branch.getElseRegion().front());
+    yield(truncateHeap(rewriter, loc, integer, word, type, isUnsigned,
+                       withOverflow));
+    rewriter.replaceOp(op, branch.getResults());
+    return success();
+  }
+};
+
 struct CmpILowering : FastPathLowering<CmpILowering> {
   using FastPathLowering::FastPathLowering;
   using Op = CmpIOp;
@@ -726,14 +910,15 @@ struct ConvertRCGMPToSCFPass
                  NegILowering, AbsILowering, ShLILowering, ShRSILowering,
                  DivSILowering, RemSILowering, FloorDivSILowering,
                  FloorModSILowering, DivRemSILowering, FloorDivModSILowering,
-                 CmpILowering>(&getContext());
+                 CmpILowering, TruncationLowering<TruncIOp>,
+                 TruncationLowering<TruncIOverflowOp>>(&getContext());
     populateMatchLoweringPatterns(patterns);
     ConversionTarget target(getContext());
     target.addIllegalOp<ConstantOp, ExtSIOp, ExtUIOp, RetainOp, ReleaseOp,
                         AddIOp, SubIOp, MulIOp, AndIOp, XOrIOp, OrIOp, NotIOp,
                         NegIOp, AbsIOp, ShLIOp, ShRSIOp, DivSIOp, RemSIOp,
                         FloorDivSIOp, FloorModSIOp, DivRemSIOp, FloorDivModSIOp,
-                        CmpIOp, MatchOp, YieldOp>();
+                        CmpIOp, TruncIOp, TruncIOverflowOp, MatchOp, YieldOp>();
     target.markUnknownOpDynamicallyLegal([](Operation *) { return true; });
     if (failed(applyPartialConversion(getOperation(), target,
                                       std::move(patterns))))

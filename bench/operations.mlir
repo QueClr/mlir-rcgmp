@@ -159,3 +159,13 @@ func.func @divremsi(%x: !rcgmp.mpz, %y: !rcgmp.mpz) -> (!rcgmp.mpz, !rcgmp.mpz) 
   %q, %r = rcgmp.divremsi %x, %y : !rcgmp.mpz
   return %q, %r : !rcgmp.mpz, !rcgmp.mpz
 }
+func.func @trunci(%x: !rcgmp.mpz) -> i64 {
+  %v = rcgmp.trunci %x : !rcgmp.mpz to i64
+  return %v : i64
+}
+func.func @trunci_overflow(%x: !rcgmp.mpz) -> i64 {
+  %v, %o = rcgmp.trunci_overflow %x : !rcgmp.mpz to i64
+  %e = arith.extui %o : i1 to i64
+  %r = arith.xori %v, %e : i64
+  return %r : i64
+}

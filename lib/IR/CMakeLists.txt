@@ -6,6 +6,7 @@ add_mlir_dialect_library(MLIRRCGMP
 
   DEPENDS RCGMPIncGen
   LINK_LIBS PUBLIC
+    MLIRArithDialect
     MLIRIR
     MLIRSupport
     MLIRDataLayoutInterfaces

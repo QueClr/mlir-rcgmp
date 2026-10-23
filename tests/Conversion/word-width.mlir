@@ -142,6 +142,23 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<!llvm.ptr, dense<
     %r = rcgmp.divsi %x, %y : !rcgmp.mpz
     return %r : !rcgmp.mpz
   }
+  // Immediates have 30 signed bits, so only an nsw result of at most 30 bits
+  // skips the heap.
+  // CHECK-LABEL: llvm.func @narrow
+  // CHECK: llvm.ashr {{.*}} : i32
+  // CHECK: llvm.trunc {{.*}} overflow<nsw> : i32 to i16
+  // CHECK-NEXT: llvm.return
+  func.func @narrow(%x: !rcgmp.mpz) -> i16 {
+    %v = rcgmp.trunci %x overflow<nsw> : !rcgmp.mpz to i16
+    return %v : i16
+  }
+  // CHECK-LABEL: llvm.func @signed_word
+  // CHECK: llvm.cond_br
+  // CHECK: llvm.load {{.*}} : !llvm.ptr -> i32
+  func.func @signed_word(%x: !rcgmp.mpz) -> i32 {
+    %v = rcgmp.trunci %x overflow<nsw> : !rcgmp.mpz to i32
+    return %v : i32
+  }
   // Limbs and tagged offsets follow the handle width: 2^32 + 1 has two 32-bit
   // limbs, and the remainder of at_least 2 subtracts 8 from the tagged bits.
   // CHECK-LABEL: llvm.func @match

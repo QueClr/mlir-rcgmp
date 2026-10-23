@@ -4,6 +4,7 @@
 #include "RCGMP/IR/RCGMPTraits.h"
 #include "RCGMP/IR/RCGMPTypes.h"
 #include <mlir/Bytecode/BytecodeOpInterface.h>
+#include <mlir/Dialect/Arith/IR/Arith.h>
 #include <mlir/IR/OpDefinition.h>
 #include <mlir/Interfaces/ControlFlowInterfaces.h>
 #include <mlir/Interfaces/InferTypeOpInterface.h>
