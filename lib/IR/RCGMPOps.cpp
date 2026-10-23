@@ -391,8 +391,10 @@ LogicalResult ArmAttr::verify(function_ref<InFlightDiagnostic()> emitError,
       return emitError() << "a 'case' arm requires at least one value";
     break;
   case ArmKind::atLeast:
+  case ArmKind::atMost:
     if (values.size() != 1)
-      return emitError() << "an 'at_least' arm requires exactly one value";
+      return emitError() << "an '" << stringifyArmKind(kind)
+                         << "' arm requires exactly one value";
     break;
   case ArmKind::otherwise:
     if (!values.empty())
@@ -435,7 +437,8 @@ ParseResult MatchOp::parse(OpAsmParser &parser, OperationState &result) {
       return failure();
     std::optional<ArmKind> kind = symbolizeArmKind(keyword);
     if (!kind)
-      return parser.emitError(loc, "expected 'case', 'at_least', or 'default'");
+      return parser.emitError(
+          loc, "expected 'case', 'at_least', 'at_most', or 'default'");
     SmallVector<Attribute> values;
     if (*kind != ArmKind::otherwise) {
       do {
@@ -553,7 +556,7 @@ SmallVector<MatchInterval> MatchOp::getIntervals() {
   // selecting its first integer.
   SmallVector<APInt> boundaries;
   llvm::DenseMap<APInt, unsigned> firstCase;
-  SmallVector<std::pair<APInt, unsigned>> thresholds;
+  SmallVector<std::pair<APInt, unsigned>> thresholds, bounds;
   std::optional<unsigned> fallback;
   for (auto [index, arm] : llvm::enumerate(getArms().getAsRange<ArmAttr>())) {
     switch (arm.getKind()) {
@@ -569,6 +572,10 @@ SmallVector<MatchInterval> MatchOp::getIntervals() {
       thresholds.emplace_back(widen(arm.getValues()[0]), index);
       boundaries.push_back(thresholds.back().first);
       break;
+    case ArmKind::atMost:
+      bounds.emplace_back(widen(arm.getValues()[0]), index);
+      boundaries.push_back(bounds.back().first + 1);
+      break;
     case ArmKind::otherwise:
       fallback = index;
       break;
@@ -582,7 +589,7 @@ SmallVector<MatchInterval> MatchOp::getIntervals() {
   });
 
   // Sweep upwards, tracking the earliest at_least arm whose threshold has been
-  // passed.
+  // passed. An at_most arm selects until its bound is passed.
   std::optional<unsigned> atLeast;
   auto earliest = [](std::optional<unsigned> a, std::optional<unsigned> b) {
     return !a || (b && *b < *a) ? b : a;
@@ -593,6 +600,9 @@ SmallVector<MatchInterval> MatchOp::getIntervals() {
          ++nextThreshold)
       atLeast = earliest(atLeast, nextThreshold->second);
     std::optional<unsigned> arm = earliest(atLeast, fallback);
+    for (auto &[bound, index] : bounds)
+      if (value.sle(bound))
+        arm = earliest(arm, index);
     if (auto it = firstCase.find(value); it != firstCase.end())
       arm = earliest(arm, it->second);
     return arm;
@@ -681,14 +691,19 @@ struct RemoveUnreachableArms : OpRewritePattern<MatchOp> {
 // at_least d selects c + d with argument m - d = n - (c + d). The inner default
 // becomes at_least c. Since m is nonnegative, inner arms selecting only
 // negative integers are dropped. An inner at_least with a negative threshold
-// would bind a different remainder, so it prevents fusion.
+// would bind a different remainder, and an inner at_most would need a lower
+// bound too, so they prevent fusion. An at_most c region matching m = c - n
+// mirrors this: case k selects c - k, and at_least d becomes at_most c - d,
+// with argument m - d = (c - d) - n.
 struct FuseRemainderMatch : OpRewritePattern<MatchOp> {
   using OpRewritePattern::OpRewritePattern;
   LogicalResult matchAndRewrite(MatchOp op,
                                 PatternRewriter &rewriter) const override {
     for (auto [index, body] : llvm::enumerate(op.getBodies())) {
       ArmAttr arm = op.getArm(index);
-      if (arm.getKind() != ArmKind::atLeast || body.getNumArguments() != 1)
+      if ((arm.getKind() != ArmKind::atLeast &&
+           arm.getKind() != ArmKind::atMost) ||
+          body.getNumArguments() != 1)
         continue;
       Block &block = body.front();
       BlockArgument remainder = block.getArgument(0);
@@ -699,8 +714,11 @@ struct FuseRemainderMatch : OpRewritePattern<MatchOp> {
           block.getTerminator()->getOperands() != inner.getResults())
         continue;
       if (llvm::any_of(inner.getArms().getAsRange<ArmAttr>(), [](ArmAttr a) {
-            return a.getKind() == ArmKind::atLeast &&
-                   cast<IntegerAttr>(a.getValues()[0]).getValue().isNegative();
+            return a.getKind() == ArmKind::atMost ||
+                   (a.getKind() == ArmKind::atLeast &&
+                    cast<IntegerAttr>(a.getValues()[0])
+                        .getValue()
+                        .isNegative());
           }))
         continue;
       return fuse(rewriter, op, index, inner);
@@ -711,12 +729,17 @@ struct FuseRemainderMatch : OpRewritePattern<MatchOp> {
 private:
   static LogicalResult fuse(PatternRewriter &rewriter, MatchOp op,
                             unsigned index, MatchOp inner) {
+    ArmKind outer = op.getArm(index).getKind();
     APInt offset =
         cast<IntegerAttr>(op.getArm(index).getValues()[0]).getValue();
+    // The integer at distance k from the bound, inside the outer arm.
     auto shift = [&](Attribute value) -> Attribute {
       APInt k = cast<IntegerAttr>(value).getValue();
       unsigned width = std::max(k.getBitWidth(), offset.getBitWidth()) + 1;
-      return getNarrowestAttr(rewriter, k.sext(width) + offset.sext(width));
+      APInt distance = k.sext(width);
+      if (outer == ArmKind::atMost)
+        distance.negate();
+      return getNarrowestAttr(rewriter, offset.sext(width) + distance);
     };
     SmallVector<Attribute> arms;
     SmallVector<Region *> bodies;
@@ -740,13 +763,15 @@ private:
                body);
         break;
       case ArmKind::atLeast:
-        keep(ArmAttr::get(op.getContext(), ArmKind::atLeast,
-                          rewriter.getArrayAttr(values)),
-             body);
+        keep(
+            ArmAttr::get(op.getContext(), outer, rewriter.getArrayAttr(values)),
+            body);
         break;
       case ArmKind::otherwise:
         keep(op.getArm(index), body);
         break;
+      case ArmKind::atMost:
+        llvm_unreachable("an inner at_most prevents fusion");
       }
     }
     for (unsigned i = index + 1; i < op.getBodies().size(); ++i)
@@ -801,12 +826,13 @@ struct FoldConstantScrutinee : OpRewritePattern<MatchOp> {
       if (arm.getKind() == ArmKind::otherwise) {
         arguments.push_back(constant);
       } else {
-        APInt threshold = cast<IntegerAttr>(arm.getValues()[0]).getValue();
-        unsigned width =
-            std::max(value.getBitWidth(), threshold.getBitWidth()) + 1;
-        arguments.push_back(
-            ConstantOp::create(rewriter, op.getLoc(), constant.getType(),
-                               value.sext(width) - threshold.sext(width)));
+        APInt bound = cast<IntegerAttr>(arm.getValues()[0]).getValue();
+        unsigned width = std::max(value.getBitWidth(), bound.getBitWidth()) + 1;
+        APInt distance = value.sext(width) - bound.sext(width);
+        if (arm.getKind() == ArmKind::atMost)
+          distance.negate();
+        arguments.push_back(ConstantOp::create(rewriter, op.getLoc(),
+                                               constant.getType(), distance));
       }
     }
     Operation *yield = block.getTerminator();

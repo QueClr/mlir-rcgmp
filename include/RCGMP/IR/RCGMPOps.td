@@ -372,6 +372,7 @@ def RCGMP_MatchOp : RCGMPOp<"match", [RCGMP_NotSpeculatable,
 
     - `case k, ...`, selecting each listed integer;
     - `at_least c`, selecting the integers at least `c`;
+    - `at_most c`, selecting the integers at most `c`;
     - `default`, selecting every integer. It may only be the last arm.
 
     Arms are tested in order, so an arm may select integers that an earlier arm
@@ -379,10 +380,14 @@ def RCGMP_MatchOp : RCGMPOp<"match", [RCGMP_NotSpeculatable,
     scrutinee, the behavior is undefined.
 
     The match consumes one owned reference to the scrutinee. An `at_least c`
-    region may take an argument, which owns one reference to the scrutinee
-    minus `c`, and a `default` region may take one owning the scrutinee. When
-    the selected region takes no argument, the match releases the scrutinee
-    itself.
+    or `at_most c` region may take an argument, which owns one reference to
+    the distance of the scrutinee from `c`: the scrutinee minus `c`, or `c`
+    minus the scrutinee, so that it is never negative. A `default` region may
+    take one owning the scrutinee. When the selected region takes no argument,
+    the match releases the scrutinee itself.
+
+    Lean's `Int.ofNat n` and `Int.negSucc n`, for example, are `at_least 0`
+    and `at_most -1`, whose arguments are `n`.
 
     ```mlir
     %r = rcgmp.match %n : !rcgmp.mpz -> i64 {

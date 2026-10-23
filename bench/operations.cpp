@@ -35,6 +35,8 @@ RCGMP_ENTRY(void *, retain, void *)
 RCGMP_ENTRY(void, release, void *)
 #undef RCGMP_ENTRY
 std::int64_t successor(void *);
+std::int64_t int_cases(void *);
+std::int64_t int_cases_noti(void *);
 void *divsi(void *, void *);
 void *remsi(void *, void *);
 void *floordivsi(void *, void *);
@@ -568,6 +570,21 @@ void registerOthers() {
             benchmark::DoNotOptimize(result);
           }
         });
+
+  // match n { at_least 0 (k) => ...; at_most -1 (k) => ... } on a shared
+  // negative scrutinee, and the same with a default arm that complements.
+  for (auto [label, operand] :
+       {std::pair{"/immediate", immediate(-5)},
+        {"/shared heap", rcgmp_mpz_from_words(lhsWords.data(), 2, 1, 0)}})
+    for (auto [name, match] : {std::pair{"int match", int_cases},
+                               {"int match noti", int_cases_noti}})
+      benchmark::RegisterBenchmark(std::string(name) + label,
+                                   [=](benchmark::State &state) {
+                                     for (auto _ : state) {
+                                       retain(operand);
+                                       benchmark::DoNotOptimize(match(operand));
+                                     }
+                                   });
 }
 
 [[maybe_unused]] const int registered =

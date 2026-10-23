@@ -481,6 +481,92 @@ func.func @match_shadow_atomic(%n: !rcgmp.mpz<atomic>) -> (i64, !rcgmp.mpz<atomi
   }
   return %r#0, %r#1 : i64, !rcgmp.mpz<atomic>
 }
+func.func @match_int_local(%n: !rcgmp.mpz) -> (i64, !rcgmp.mpz) {
+  %r:2 = rcgmp.match %n : !rcgmp.mpz -> (i64, !rcgmp.mpz) {
+    at_least 0 (%x) {
+      %i = arith.constant 0 : i64
+      rcgmp.yield %i, %x : i64, !rcgmp.mpz
+    }
+    at_most -1 (%x) {
+      %i = arith.constant 1 : i64
+      rcgmp.yield %i, %x : i64, !rcgmp.mpz
+    }
+  }
+  return %r#0, %r#1 : i64, !rcgmp.mpz
+}
+func.func @match_int_atomic(%n: !rcgmp.mpz<atomic>) -> (i64, !rcgmp.mpz<atomic>) {
+  %r:2 = rcgmp.match %n : !rcgmp.mpz<atomic> -> (i64, !rcgmp.mpz<atomic>) {
+    at_least 0 (%x) {
+      %i = arith.constant 0 : i64
+      rcgmp.yield %i, %x : i64, !rcgmp.mpz<atomic>
+    }
+    at_most -1 (%x) {
+      %i = arith.constant 1 : i64
+      rcgmp.yield %i, %x : i64, !rcgmp.mpz<atomic>
+    }
+  }
+  return %r#0, %r#1 : i64, !rcgmp.mpz<atomic>
+}
+func.func @match_below_local(%n: !rcgmp.mpz) -> (i64, !rcgmp.mpz) {
+  %r:2 = rcgmp.match %n : !rcgmp.mpz -> (i64, !rcgmp.mpz) {
+    case 3 {
+      %i = arith.constant 0 : i64
+      %x = rcgmp.constant 0 : !rcgmp.mpz
+      rcgmp.yield %i, %x : i64, !rcgmp.mpz
+    }
+    at_most -1180591620717411303424 (%x) {
+      %i = arith.constant 1 : i64
+      rcgmp.yield %i, %x : i64, !rcgmp.mpz
+    }
+    at_most -10 (%x) {
+      %i = arith.constant 2 : i64
+      rcgmp.yield %i, %x : i64, !rcgmp.mpz
+    }
+    at_most 7 (%x) {
+      %i = arith.constant 3 : i64
+      rcgmp.yield %i, %x : i64, !rcgmp.mpz
+    }
+    at_least 18446744073709551616 (%x) {
+      %i = arith.constant 4 : i64
+      rcgmp.yield %i, %x : i64, !rcgmp.mpz
+    }
+    default (%x) {
+      %i = arith.constant 5 : i64
+      rcgmp.yield %i, %x : i64, !rcgmp.mpz
+    }
+  }
+  return %r#0, %r#1 : i64, !rcgmp.mpz
+}
+func.func @match_below_atomic(%n: !rcgmp.mpz<atomic>) -> (i64, !rcgmp.mpz<atomic>) {
+  %r:2 = rcgmp.match %n : !rcgmp.mpz<atomic> -> (i64, !rcgmp.mpz<atomic>) {
+    case 3 {
+      %i = arith.constant 0 : i64
+      %x = rcgmp.constant 0 : !rcgmp.mpz<atomic>
+      rcgmp.yield %i, %x : i64, !rcgmp.mpz<atomic>
+    }
+    at_most -1180591620717411303424 (%x) {
+      %i = arith.constant 1 : i64
+      rcgmp.yield %i, %x : i64, !rcgmp.mpz<atomic>
+    }
+    at_most -10 (%x) {
+      %i = arith.constant 2 : i64
+      rcgmp.yield %i, %x : i64, !rcgmp.mpz<atomic>
+    }
+    at_most 7 (%x) {
+      %i = arith.constant 3 : i64
+      rcgmp.yield %i, %x : i64, !rcgmp.mpz<atomic>
+    }
+    at_least 18446744073709551616 (%x) {
+      %i = arith.constant 4 : i64
+      rcgmp.yield %i, %x : i64, !rcgmp.mpz<atomic>
+    }
+    default (%x) {
+      %i = arith.constant 5 : i64
+      rcgmp.yield %i, %x : i64, !rcgmp.mpz<atomic>
+    }
+  }
+  return %r#0, %r#1 : i64, !rcgmp.mpz<atomic>
+}
 func.func @index_table_local(%n: !rcgmp.mpz) -> i64 {
   %r = rcgmp.match %n : !rcgmp.mpz -> i64 {
     case 0 {

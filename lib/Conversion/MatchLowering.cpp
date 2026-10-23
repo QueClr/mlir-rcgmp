@@ -685,6 +685,12 @@ enum class Binding {
   // The scrutinee minus a negative threshold, which may leave the immediate
   // range and is subtracted in the region.
   negativeRemainder,
+  // A negative bound minus the scrutinee, which keeps an immediate tagged
+  // after complementing its bits and adding 4 * bound + 3.
+  deficit,
+  // A nonnegative bound minus the scrutinee, which may leave the immediate
+  // range and is subtracted in the region.
+  positiveDeficit,
 };
 
 // Lowers one match. Both the immediate and the heap path select an arm and
@@ -710,8 +716,13 @@ public:
           threshold = cast<IntegerAttr>(arm.getValues()[0]).getValue();
           binding = threshold.isNegative() ? Binding::negativeRemainder
                                            : Binding::remainder;
+        } else if (arm.getKind() == ArmKind::atMost) {
+          threshold = cast<IntegerAttr>(arm.getValues()[0]).getValue();
+          binding = threshold.isNegative() ? Binding::deficit
+                                           : Binding::positiveDeficit;
         }
       }
+      hasDeficit |= binding == Binding::deficit;
       bindings.push_back(binding);
       thresholds.push_back(threshold);
       if (isConstantArm(body)) {
@@ -776,6 +787,8 @@ public:
         Value argument = bound;
         if (bindings[i] == Binding::negativeRemainder)
           argument = subtract(bound, i);
+        else if (bindings[i] == Binding::positiveDeficit)
+          argument = subtractFromBound(bound, i);
         arguments.push_back(argument);
       }
       auto yield = cast<YieldOp>(source.getTerminator());
@@ -827,11 +840,32 @@ private:
         ConstantOp::create(rewriter, loc, type, thresholds[arm]));
   }
 
-  // What the immediate tagged bits lose to become the region argument.
+  // The bound of an at_most arm minus value. For the bound -1 that is the
+  // complement, which keeps a unique heap value in place.
+  Value subtractFromBound(Value value, unsigned arm) {
+    if (thresholds[arm].isAllOnes())
+      return NotIOp::create(rewriter, loc, value);
+    return SubIOp::create(
+        rewriter, loc, ConstantOp::create(rewriter, loc, type, thresholds[arm]),
+        value);
+  }
+
+  // The immediate tagged bits b become the region argument as
+  // (b ^ flip) - offset: b - 4 * threshold for a remainder, and
+  // ~b + 4 * bound + 3 = 4 * (bound - n) + 1 for a deficit.
   APInt offset(unsigned arm) const {
-    if (bindings[arm] != Binding::remainder)
+    switch (bindings[arm]) {
+    case Binding::remainder:
+      return thresholds[arm].zextOrTrunc(width).shl(2);
+    case Binding::deficit:
+      return -(thresholds[arm].sextOrTrunc(width).shl(2) + 3);
+    default:
       return APInt(width, 0);
-    return thresholds[arm].zextOrTrunc(width).shl(2);
+    }
+  }
+  APInt flip(unsigned arm) const {
+    return bindings[arm] == Binding::deficit ? APInt::getAllOnes(width)
+                                             : APInt(width, 0);
   }
 
   // The results of a constant arm, or poison for any other.
@@ -854,10 +888,12 @@ private:
   }
 
   // The leaf values of an immediate arm, if they are all integer constants:
-  // the dispatch index, the offset, and the results, which are poison, here
-  // zero, for an arm that is not constant.
+  // the dispatch index, the offset, the flip if any arm has one, and the
+  // results, which are poison, here zero, for an arm that is not constant.
   std::optional<SmallVector<APInt>> knownImmediateLeaf(unsigned arm) {
     SmallVector<APInt> values{APInt(64, dispatchIndex[arm]), offset(arm)};
+    if (hasDeficit)
+      values.push_back(flip(arm));
     if (!hasConstantArms)
       return values;
     Operation *yield = op.getBodies()[arm].front().getTerminator();
@@ -878,7 +914,7 @@ private:
   }
 
   // Selects among immediates by their payload. Each leaf yields the dispatch
-  // index, the amount to subtract from the tagged bits to obtain the region
+  // index, the offset and flip that turn the tagged bits into the region
   // argument, and the results of a constant arm.
   Values selectImmediate(ArrayRef<MatchInterval> intervals, Value bits) {
     APInt minimum = APInt::getSignedMinValue(width).ashr(2);
@@ -892,6 +928,8 @@ private:
       payload = arith::ShRSIOp::create(rewriter, loc, bits, two);
     }
     SmallVector<Type> types{rewriter.getIndexType(), word};
+    if (hasDeficit)
+      types.push_back(word);
     if (hasConstantArms)
       llvm::append_range(types, op.getResultTypes());
     Selector selector(rewriter, loc, types,
@@ -901,23 +939,30 @@ private:
           Values leaf{
               arith::ConstantIndexOp::create(rewriter, loc, dispatchIndex[arm]),
               integerConstant(rewriter, loc, word, offset(arm))};
+          if (hasDeficit)
+            leaf.push_back(integerConstant(rewriter, loc, word, flip(arm)));
           llvm::append_range(leaf, results(arm));
           return leaf;
         });
+    if (hasDeficit)
+      bits = arith::XOrIOp::create(rewriter, loc, bits, selected[2]);
     Value bound = arith::SubIOp::create(rewriter, loc, bits, selected[1]);
     Values selection{selected[0],
                      bridge::MpzFromBitsOp::create(rewriter, loc, type, bound)};
-    llvm::append_range(selection, ArrayRef(selected).drop_front(2));
+    llvm::append_range(selection,
+                       ArrayRef(selected).drop_front(hasDeficit ? 3 : 2));
     return selection;
   }
 
-  // The leaf of a heap arm, which subtracts a nonnegative threshold here and
-  // releases the scrutinee for a constant arm.
+  // The leaf of a heap arm, which subtracts a nonnegative threshold or from a
+  // negative bound here, and releases the scrutinee for a constant arm.
   Values heapLeaf(unsigned arm) {
     Value scrutinee = op.getScrutinee();
     Value bound = scrutinee;
     if (bindings[arm] == Binding::remainder)
       bound = subtract(scrutinee, arm);
+    else if (bindings[arm] == Binding::deficit)
+      bound = subtractFromBound(scrutinee, arm);
     else if (isConstant(arm))
       ReleaseOp::create(rewriter, loc, scrutinee);
     Values leaf{
@@ -990,6 +1035,8 @@ private:
   SmallVector<unsigned> dispatchIndex;
   unsigned dispatched = 0;
   bool hasConstantArms = false;
+  // Whether immediate leaves also yield a flip, which only deficits need.
+  bool hasDeficit = false;
 };
 
 struct MatchLowering : OpRewritePattern<MatchOp> {

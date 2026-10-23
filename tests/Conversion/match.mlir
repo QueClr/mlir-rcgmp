@@ -216,3 +216,42 @@ func.func @negative_threshold(%n: !rcgmp.mpz) -> i64 {
   }
   return %r : i64
 }
+
+// An immediate below a negative bound complements its bits and adds 4 * bound
+// + 3, and a heap integer is complemented for the bound -1.
+// CHECK-LABEL: func.func @negsucc
+// CHECK: arith.xori
+// CHECK: arith.subi
+// CHECK: rcgmp.bridge.mpz.from_bits
+// CHECK: } else {
+// CHECK: func.call @rcgmp_mpz_not
+// CHECK: scf.index_switch
+func.func @negsucc(%n: !rcgmp.mpz) -> i64 {
+  %r = rcgmp.match %n : !rcgmp.mpz -> i64 {
+    at_least 0 (%k) {
+      %u = func.call @use(%k) : (!rcgmp.mpz) -> i64
+      rcgmp.yield %u : i64
+    }
+    at_most -1 (%k) {
+      %u = func.call @use(%k) : (!rcgmp.mpz) -> i64
+      rcgmp.yield %u : i64
+    }
+  }
+  return %r : i64
+}
+
+// Subtracting from a nonnegative bound may leave the immediate range, so the
+// arm subtracts with an overflow check.
+// CHECK-LABEL: func.func @positive_bound
+// CHECK: scf.index_switch
+// CHECK: rcgmp.bridge.subsi_extended
+// CHECK: func.call @use
+func.func @positive_bound(%n: !rcgmp.mpz) -> i64 {
+  %r = rcgmp.match %n : !rcgmp.mpz -> i64 {
+    at_most 5 (%k) {
+      %u = func.call @use(%k) : (!rcgmp.mpz) -> i64
+      rcgmp.yield %u : i64
+    }
+  }
+  return %r : i64
+}

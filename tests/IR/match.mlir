@@ -43,3 +43,20 @@ func.func @no_results(%n: !rcgmp.mpz<atomic>) {
   }
   return
 }
+
+// at_most arms bind the distance below their bound, as Int.negSucc does.
+// CHECK-LABEL: func.func @at_most
+// CHECK: at_least 0 (%{{.*}}) {
+// CHECK: at_most -1 (%{{.*}}) {
+// GENERIC: #rcgmp.arm<at_most, [true]>
+func.func @at_most(%n: !rcgmp.mpz) -> !rcgmp.mpz {
+  %r = rcgmp.match %n : !rcgmp.mpz -> !rcgmp.mpz {
+    at_least 0 (%k) {
+      rcgmp.yield %k : !rcgmp.mpz
+    }
+    at_most -1 (%k) {
+      rcgmp.yield %k : !rcgmp.mpz
+    }
+  }
+  return %r : !rcgmp.mpz
+}

@@ -44,6 +44,10 @@ MatchResult match_run_local(void *);
 MatchResult match_run_atomic(void *);
 MatchResult match_shadow_local(void *);
 MatchResult match_shadow_atomic(void *);
+MatchResult match_int_local(void *);
+MatchResult match_int_atomic(void *);
+MatchResult match_below_local(void *);
+MatchResult match_below_atomic(void *);
 std::int64_t index_table_local(void *);
 std::int64_t index_table_atomic(void *);
 std::int64_t index_hashed_local(void *);
@@ -60,7 +64,7 @@ using rcgmp::Counting;
 using rcgmp::Handle;
 using namespace rcgmp::test;
 
-enum class Kind { exact, atLeast, otherwise };
+enum class Kind { exact, atLeast, atMost, otherwise };
 
 struct Arm {
   Kind kind;
@@ -175,6 +179,22 @@ const std::vector<Shape> shapes{
          {Kind::exact, {"-3"}, false},
      },
      {match_shadow_local, match_shadow_atomic}},
+    {"int",
+     {
+         {Kind::atLeast, {"0"}, true},
+         {Kind::atMost, {"-1"}, true},
+     },
+     {match_int_local, match_int_atomic}},
+    {"below",
+     {
+         {Kind::exact, {"3"}, false},
+         {Kind::atMost, {"-1180591620717411303424"}, true},
+         {Kind::atMost, {"-10"}, true},
+         {Kind::atMost, {"7"}, true},
+         {Kind::atLeast, {"18446744073709551616"}, true},
+         {Kind::otherwise, {}, true},
+     },
+     {match_below_local, match_below_atomic}},
     {"table",
      {
          {Kind::exact, {"0"}, false},
@@ -239,6 +259,8 @@ std::optional<std::size_t> select(const Shape &shape, const Integer &value) {
     bool selected = arm.kind == Kind::otherwise ||
                     (arm.kind == Kind::atLeast &&
                      mpz_cmp(value, parse(arm.values[0])) >= 0) ||
+                    (arm.kind == Kind::atMost &&
+                     mpz_cmp(value, parse(arm.values[0])) <= 0) ||
                     std::ranges::any_of(arm.values, [&](std::string_view k) {
                       return arm.kind == Kind::exact && parse(k) == value;
                     });
@@ -273,6 +295,8 @@ void checkMatch(const Shape &shape, Counting counting, const Operand &operand,
   Integer bound(0);
   if (arm.argument && arm.kind == Kind::atLeast)
     mpz_sub(bound, value, parse(arm.values[0]));
+  else if (arm.argument && arm.kind == Kind::atMost)
+    mpz_sub(bound, parse(arm.values[0]), value);
   else if (arm.argument)
     bound = value;
   EXPECT_THAT(result.bound, Represents(bound));
@@ -282,6 +306,12 @@ void checkMatch(const Shape &shape, Counting counting, const Operand &operand,
       !shared && value.sign() >= 0 && parse(arm.values[0]).sign() >= 0)
     EXPECT_EQ(counter.allocations(), 0u)
         << "the remainder did not reuse the scrutinee";
+  // Complementing a negative, uniquely owned heap scrutinee for the bound -1
+  // decreases its magnitude in place.
+  if (arm.argument && arm.kind == Kind::atMost && heap && !immortal &&
+      !shared && parse(arm.values[0]) == Integer(-1))
+    EXPECT_EQ(counter.allocations(), 0u)
+        << "the complement did not reuse the scrutinee";
   if (shared)
     releaseShared(counting, x, value, result.bound, immortal && heap);
   releases[index](result.bound);

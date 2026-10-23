@@ -123,6 +123,53 @@ func.func @successor(%n: !rcgmp.mpz) -> i64 {
   }
   return %r : i64
 }
+func.func @int_cases(%n: !rcgmp.mpz) -> i64 {
+  %r = rcgmp.match %n : !rcgmp.mpz -> i64 {
+    at_least 0 (%k) {
+      %bound = rcgmp.constant 1000 : !rcgmp.mpz
+      %above = rcgmp.cmpi sgt, %k, %bound : !rcgmp.mpz
+      rcgmp.release %k : !rcgmp.mpz
+      %hi = arith.constant 7 : i64
+      %lo = arith.constant 5 : i64
+      %v = arith.select %above, %hi, %lo : i64
+      rcgmp.yield %v : i64
+    }
+    at_most -1 (%k) {
+      %bound = rcgmp.constant 1000 : !rcgmp.mpz
+      %above = rcgmp.cmpi sgt, %k, %bound : !rcgmp.mpz
+      rcgmp.release %k : !rcgmp.mpz
+      %hi = arith.constant 5 : i64
+      %lo = arith.constant 3 : i64
+      %v = arith.select %above, %hi, %lo : i64
+      rcgmp.yield %v : i64
+    }
+  }
+  return %r : i64
+}
+func.func @int_cases_noti(%n: !rcgmp.mpz) -> i64 {
+  %r = rcgmp.match %n : !rcgmp.mpz -> i64 {
+    at_least 0 (%k) {
+      %bound = rcgmp.constant 1000 : !rcgmp.mpz
+      %above = rcgmp.cmpi sgt, %k, %bound : !rcgmp.mpz
+      rcgmp.release %k : !rcgmp.mpz
+      %hi = arith.constant 7 : i64
+      %lo = arith.constant 5 : i64
+      %v = arith.select %above, %hi, %lo : i64
+      rcgmp.yield %v : i64
+    }
+    default (%m) {
+      %k = rcgmp.noti %m : !rcgmp.mpz
+      %bound = rcgmp.constant 1000 : !rcgmp.mpz
+      %above = rcgmp.cmpi sgt, %k, %bound : !rcgmp.mpz
+      rcgmp.release %k : !rcgmp.mpz
+      %hi = arith.constant 5 : i64
+      %lo = arith.constant 3 : i64
+      %v = arith.select %above, %hi, %lo : i64
+      rcgmp.yield %v : i64
+    }
+  }
+  return %r : i64
+}
 func.func @shli(%x: !rcgmp.mpz, %n: i64) -> !rcgmp.mpz {
   %r = rcgmp.shli %x, %n : !rcgmp.mpz, i64
   return %r : !rcgmp.mpz

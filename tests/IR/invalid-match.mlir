@@ -89,9 +89,19 @@ func.func @no_arms(%n: !rcgmp.mpz) {
 
 func.func @unknown_arm(%n: !rcgmp.mpz) {
   rcgmp.match %n : !rcgmp.mpz {
-    // expected-error@+1 {{expected 'case', 'at_least', or 'default'}}
+    // expected-error@+1 {{expected 'case', 'at_least', 'at_most', or 'default'}}
     otherwise {
     }
   }
+  return
+}
+
+// -----
+
+func.func @at_most_values(%n: !rcgmp.mpz) {
+  // expected-error@+1 {{an 'at_most' arm requires exactly one value}}
+  "rcgmp.match"(%n) <{arms = [#rcgmp.arm<at_most, []>]}> ({
+    rcgmp.yield
+  }) : (!rcgmp.mpz) -> ()
   return
 }

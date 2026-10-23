@@ -18,7 +18,8 @@ def RCGMP_CmpIPredicateAttr : I64EnumAttr<"CmpIPredicate", "", [
 def RCGMP_ArmKind : I32EnumAttr<"ArmKind", "", [
     I32EnumAttrCase<"exact", 0, "case">,
     I32EnumAttrCase<"atLeast", 1, "at_least">,
-    I32EnumAttrCase<"otherwise", 2, "default">]> {
+    I32EnumAttrCase<"otherwise", 2, "default">,
+    I32EnumAttrCase<"atMost", 3, "at_most">]> {
   let cppNamespace = "::mlir::rcgmp";
   let genSpecializedAttr = 0;
 }

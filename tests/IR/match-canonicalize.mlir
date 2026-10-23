@@ -160,3 +160,78 @@ func.func @constant() -> i64 {
   }
   return %r : i64
 }
+
+// Nested negSucc patterns join their parent in the mirrored direction: the
+// inner at_least 1 on -1 - n binds -2 - n.
+// CHECK-LABEL: func.func @predecessors
+// CHECK: rcgmp.match %{{.*}} : !rcgmp.mpz -> i64 {
+// CHECK-NEXT: at_least 0 {
+// CHECK: case -1 {
+// CHECK: at_most -2 (%[[K:.*]]) {
+// CHECK-NEXT: func.call @use(%[[K]])
+// CHECK-NOT: rcgmp.match
+func.func @predecessors(%n: !rcgmp.mpz, %a: i64, %b: i64) -> i64 {
+  %r = rcgmp.match %n : !rcgmp.mpz -> i64 {
+    at_least 0 {
+      rcgmp.yield %a : i64
+    }
+    at_most -1 (%m) {
+      %s = rcgmp.match %m : !rcgmp.mpz -> i64 {
+        case 0 {
+          rcgmp.yield %b : i64
+        }
+        at_least 1 (%k) {
+          %u = func.call @use(%k) : (!rcgmp.mpz) -> i64
+          rcgmp.yield %u : i64
+        }
+      }
+      rcgmp.yield %s : i64
+    }
+  }
+  return %r : i64
+}
+
+// An inner at_most counts in the other direction, so the matches stay apart.
+// CHECK-LABEL: func.func @inner_at_most
+// CHECK: rcgmp.match
+// CHECK: rcgmp.match
+func.func @inner_at_most(%n: !rcgmp.mpz, %a: i64) -> i64 {
+  %r = rcgmp.match %n : !rcgmp.mpz -> i64 {
+    at_most -1 (%m) {
+      %s = rcgmp.match %m : !rcgmp.mpz -> i64 {
+        at_most 3 {
+          rcgmp.yield %a : i64
+        }
+        default (%k) {
+          %u = func.call @use(%k) : (!rcgmp.mpz) -> i64
+          rcgmp.yield %u : i64
+        }
+      }
+      rcgmp.yield %s : i64
+    }
+    default {
+      rcgmp.yield %a : i64
+    }
+  }
+  return %r : i64
+}
+
+// A constant scrutinee below an at_most bound binds its distance.
+// CHECK-LABEL: func.func @constant_at_most
+// CHECK-NOT: rcgmp.match
+// CHECK: %[[K:.*]] = rcgmp.constant 340282366920938463463374607431768211459 : !rcgmp.mpz
+// CHECK: call @use(%[[K]])
+func.func @constant_at_most() -> i64 {
+  %c = rcgmp.constant -340282366920938463463374607431768211456 : !rcgmp.mpz
+  %r = rcgmp.match %c : !rcgmp.mpz -> i64 {
+    case 0 {
+      %z = arith.constant 0 : i64
+      rcgmp.yield %z : i64
+    }
+    at_most 3 (%k) {
+      %u = func.call @use(%k) : (!rcgmp.mpz) -> i64
+      rcgmp.yield %u : i64
+    }
+  }
+  return %r : i64
+}
