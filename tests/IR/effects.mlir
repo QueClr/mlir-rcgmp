@@ -1,14 +1,14 @@
 // RUN: %rcgmp-opt %s -cse -canonicalize | %FileCheck %s
 
-// Each from_int creates its own reference, so equal inputs are not merged.
+// Each extsi creates its own reference, so equal inputs are not merged.
 // CHECK-LABEL: func.func @distinct_allocations
-// CHECK: %[[A:.*]] = rcgmp.from_int
-// CHECK: %[[B:.*]] = rcgmp.from_int
+// CHECK: %[[A:.*]] = rcgmp.extsi
+// CHECK: %[[B:.*]] = rcgmp.extsi
 // CHECK: rcgmp.release %[[A]]
 // CHECK: rcgmp.release %[[B]]
 func.func @distinct_allocations(%i: i64) {
-  %a = rcgmp.from_int %i : i64 to !rcgmp.mpz
-  %b = rcgmp.from_int %i : i64 to !rcgmp.mpz
+  %a = rcgmp.extsi %i : i64 to !rcgmp.mpz
+  %b = rcgmp.extsi %i : i64 to !rcgmp.mpz
   rcgmp.release %a : !rcgmp.mpz
   rcgmp.release %b : !rcgmp.mpz
   return
@@ -16,12 +16,12 @@ func.func @distinct_allocations(%i: i64) {
 
 // An unused allocation is dead; reference-count updates are not.
 // CHECK-LABEL: func.func @dead_code
-// CHECK-NOT: rcgmp.from_int
+// CHECK-NOT: rcgmp.extsi
 // CHECK: rcgmp.retain %[[X:.*]] :
 // CHECK-NEXT: rcgmp.release %[[X]]
 // CHECK-NEXT: rcgmp.release %[[X]]
 func.func @dead_code(%i: i64, %x: !rcgmp.mpz) {
-  %unused = rcgmp.from_int %i : i64 to !rcgmp.mpz
+  %unused = rcgmp.extsi %i : i64 to !rcgmp.mpz
   rcgmp.retain %x : !rcgmp.mpz
   rcgmp.release %x : !rcgmp.mpz
   rcgmp.release %x : !rcgmp.mpz

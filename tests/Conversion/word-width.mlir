@@ -51,7 +51,7 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<!llvm.ptr, dense<
   // CHECK: llvm.trunc {{.*}} : i64 to i32
   // CHECK: llvm.inttoptr {{.*}} : i32 to !llvm.ptr
   func.func @make(%x: i64) -> !rcgmp.mpz {
-    %r = rcgmp.from_int %x : i64 to !rcgmp.mpz
+    %r = rcgmp.extsi %x : i64 to !rcgmp.mpz
     return %r : !rcgmp.mpz
   }
   // CHECK-LABEL: llvm.func @retain

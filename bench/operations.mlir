@@ -40,8 +40,8 @@ func.func @cmpi(%x: !rcgmp.mpz, %y: !rcgmp.mpz) -> i32 {
   %e = arith.extui %r : i1 to i32
   return %e : i32
 }
-func.func @from_int(%v: i64) -> !rcgmp.mpz {
-  %r = rcgmp.from_int %v : i64 to !rcgmp.mpz
+func.func @extsi(%v: i64) -> !rcgmp.mpz {
+  %r = rcgmp.extsi %v : i64 to !rcgmp.mpz
   return %r : !rcgmp.mpz
 }
 func.func @retain(%x: !rcgmp.mpz) -> !rcgmp.mpz {
@@ -93,8 +93,8 @@ func.func @cmpi_atomic(%x: !rcgmp.mpz<atomic>, %y: !rcgmp.mpz<atomic>) -> i32 {
   %e = arith.extui %r : i1 to i32
   return %e : i32
 }
-func.func @from_int_atomic(%v: i64) -> !rcgmp.mpz<atomic> {
-  %r = rcgmp.from_int %v : i64 to !rcgmp.mpz<atomic>
+func.func @extsi_atomic(%v: i64) -> !rcgmp.mpz<atomic> {
+  %r = rcgmp.extsi %v : i64 to !rcgmp.mpz<atomic>
   return %r : !rcgmp.mpz<atomic>
 }
 func.func @retain_atomic(%x: !rcgmp.mpz<atomic>) -> !rcgmp.mpz<atomic> {
