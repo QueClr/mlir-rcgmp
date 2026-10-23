@@ -58,6 +58,324 @@ void ConstantOp::build(OpBuilder &builder, OperationState &state, Type type,
   build(builder, state, type, getNarrowestAttr(builder, value));
 }
 
+//===----------------------------------------------------------------------===//
+// Folding
+//===----------------------------------------------------------------------===//
+
+// A result of more bits stays computed at run time: its constant would be a
+// large static object, and computing it could take long.
+static constexpr unsigned maxFoldedBits = 4096;
+
+// The value of a constant mpz operand, which is signed.
+static std::optional<APInt> mpzOperand(Attribute attribute) {
+  if (auto value = dyn_cast_or_null<MpzValueAttr>(attribute))
+    return value.getValue();
+  return std::nullopt;
+}
+
+// The bits of a constant fixed-width integer operand.
+static std::optional<APInt> integerOperand(Attribute attribute) {
+  if (auto integer = dyn_cast_or_null<IntegerAttr>(attribute))
+    return integer.getValue();
+  return std::nullopt;
+}
+
+// The constant mpz value, in its narrowest width, unless it is too wide to
+// fold.
+static OpFoldResult foldedMpz(MLIRContext *context, const APInt &value) {
+  unsigned width = value.getSignificantBits();
+  if (width > maxFoldedBits)
+    return {};
+  return MpzValueAttr::get(context, value.sextOrTrunc(width));
+}
+
+// Sign-extends both values to one width with extra bits beyond the wider.
+static std::pair<APInt, APInt> widened(const APInt &a, const APInt &b,
+                                       unsigned extra) {
+  unsigned width = std::max(a.getBitWidth(), b.getBitWidth()) + extra;
+  return {a.sext(width), b.sext(width)};
+}
+
+// Folds an operation on two constant mpz operands.
+template <typename Function>
+static OpFoldResult foldBinary(Operation *op, ArrayRef<Attribute> operands,
+                               Function function) {
+  std::optional<APInt> lhs = mpzOperand(operands[0]),
+                       rhs = mpzOperand(operands[1]);
+  if (!lhs || !rhs)
+    return {};
+  std::optional<APInt> result = function(*lhs, *rhs);
+  return result ? foldedMpz(op->getContext(), *result) : OpFoldResult();
+}
+
+OpFoldResult ConstantOp::fold(FoldAdaptor) {
+  return MpzValueAttr::get(getContext(), getValue());
+}
+
+OpFoldResult ExtSIOp::fold(FoldAdaptor adaptor) {
+  std::optional<APInt> value = integerOperand(adaptor.getValue());
+  return value ? foldedMpz(getContext(), *value) : OpFoldResult();
+}
+
+OpFoldResult ExtUIOp::fold(FoldAdaptor adaptor) {
+  std::optional<APInt> value = integerOperand(adaptor.getValue());
+  return value ? foldedMpz(getContext(), value->zext(value->getBitWidth() + 1))
+               : OpFoldResult();
+}
+
+OpFoldResult AddIOp::fold(FoldAdaptor adaptor) {
+  return foldBinary(*this, adaptor.getOperands(),
+                    [](const APInt &lhs, const APInt &rhs) {
+                      auto [a, b] = widened(lhs, rhs, 1);
+                      return std::optional(a + b);
+                    });
+}
+
+OpFoldResult SubIOp::fold(FoldAdaptor adaptor) {
+  return foldBinary(*this, adaptor.getOperands(),
+                    [](const APInt &lhs, const APInt &rhs) {
+                      auto [a, b] = widened(lhs, rhs, 1);
+                      return std::optional(a - b);
+                    });
+}
+
+OpFoldResult MulIOp::fold(FoldAdaptor adaptor) {
+  return foldBinary(
+      *this, adaptor.getOperands(),
+      [](const APInt &lhs, const APInt &rhs) -> std::optional<APInt> {
+        // A product of nonzero integers has at least one bit less than its
+        // operands together.
+        unsigned bits = lhs.getSignificantBits() + rhs.getSignificantBits();
+        if (!lhs.isZero() && !rhs.isZero() && bits > maxFoldedBits + 1)
+          return std::nullopt;
+        unsigned width = lhs.getBitWidth() + rhs.getBitWidth();
+        return lhs.sext(width) * rhs.sext(width);
+      });
+}
+
+OpFoldResult AndIOp::fold(FoldAdaptor adaptor) {
+  return foldBinary(*this, adaptor.getOperands(),
+                    [](const APInt &lhs, const APInt &rhs) {
+                      auto [a, b] = widened(lhs, rhs, 0);
+                      return std::optional(a & b);
+                    });
+}
+
+OpFoldResult OrIOp::fold(FoldAdaptor adaptor) {
+  return foldBinary(*this, adaptor.getOperands(),
+                    [](const APInt &lhs, const APInt &rhs) {
+                      auto [a, b] = widened(lhs, rhs, 0);
+                      return std::optional(a | b);
+                    });
+}
+
+OpFoldResult XOrIOp::fold(FoldAdaptor adaptor) {
+  return foldBinary(*this, adaptor.getOperands(),
+                    [](const APInt &lhs, const APInt &rhs) {
+                      auto [a, b] = widened(lhs, rhs, 0);
+                      return std::optional(a ^ b);
+                    });
+}
+
+OpFoldResult NotIOp::fold(FoldAdaptor adaptor) {
+  std::optional<APInt> value = mpzOperand(adaptor.getOperand());
+  return value ? foldedMpz(getContext(), ~*value) : OpFoldResult();
+}
+
+OpFoldResult NegIOp::fold(FoldAdaptor adaptor) {
+  std::optional<APInt> value = mpzOperand(adaptor.getOperand());
+  return value ? foldedMpz(getContext(), -value->sext(value->getBitWidth() + 1))
+               : OpFoldResult();
+}
+
+OpFoldResult AbsIOp::fold(FoldAdaptor adaptor) {
+  std::optional<APInt> value = mpzOperand(adaptor.getOperand());
+  return value ? foldedMpz(getContext(),
+                           value->sext(value->getBitWidth() + 1).abs())
+               : OpFoldResult();
+}
+
+// The shift amount is unsigned, and one beyond 64 bits exceeds any limit.
+static std::optional<std::uint64_t> shiftAmount(Attribute attribute) {
+  std::optional<APInt> amount = integerOperand(attribute);
+  if (!amount)
+    return std::nullopt;
+  return amount->getActiveBits() > 64 ? UINT64_MAX : amount->getZExtValue();
+}
+
+OpFoldResult ShLIOp::fold(FoldAdaptor adaptor) {
+  std::optional<APInt> value = mpzOperand(adaptor.getValue());
+  std::optional<std::uint64_t> amount = shiftAmount(adaptor.getAmount());
+  if (!value || !amount)
+    return {};
+  if (value->isZero())
+    return foldedMpz(getContext(), *value);
+  if (*amount > maxFoldedBits)
+    return {};
+  unsigned width = value->getBitWidth() + *amount;
+  return foldedMpz(getContext(), value->sext(width).shl(*amount));
+}
+
+OpFoldResult ShRSIOp::fold(FoldAdaptor adaptor) {
+  std::optional<APInt> value = mpzOperand(adaptor.getValue());
+  std::optional<std::uint64_t> amount = shiftAmount(adaptor.getAmount());
+  if (!value || !amount)
+    return {};
+  // Shifting by the width or more leaves the sign.
+  if (*amount >= value->getBitWidth())
+    return foldedMpz(getContext(),
+                     APInt(1, value->isNegative() ? 1 : 0, /*isSigned=*/false));
+  return foldedMpz(getContext(), value->ashr(*amount));
+}
+
+// The quotient and remainder of constant operands, rounded toward zero or
+// toward negative infinity. A zero divisor is not folded: without
+// assume_nonzero it terminates the program, and with it it is undefined.
+static std::optional<std::pair<APInt, APInt>>
+divideConstants(ArrayRef<Attribute> operands, bool floor) {
+  std::optional<APInt> lhs = mpzOperand(operands[0]),
+                       rhs = mpzOperand(operands[1]);
+  if (!lhs || !rhs || rhs->isZero())
+    return std::nullopt;
+  // One extra bit holds the quotient of the minimum by -1.
+  auto [a, b] = widened(*lhs, *rhs, 1);
+  APInt quotient, remainder;
+  APInt::sdivrem(a, b, quotient, remainder);
+  if (floor && !remainder.isZero() &&
+      remainder.isNegative() != b.isNegative()) {
+    quotient -= 1;
+    remainder += b;
+  }
+  return std::pair(quotient, remainder);
+}
+
+template <bool floor, bool quotient>
+static OpFoldResult foldDivision(Operation *op, ArrayRef<Attribute> operands) {
+  auto results = divideConstants(operands, floor);
+  if (!results)
+    return {};
+  return foldedMpz(op->getContext(),
+                   quotient ? results->first : results->second);
+}
+
+OpFoldResult DivSIOp::fold(FoldAdaptor adaptor) {
+  return foldDivision<false, true>(*this, adaptor.getOperands());
+}
+
+OpFoldResult RemSIOp::fold(FoldAdaptor adaptor) {
+  return foldDivision<false, false>(*this, adaptor.getOperands());
+}
+
+OpFoldResult FloorDivSIOp::fold(FoldAdaptor adaptor) {
+  return foldDivision<true, true>(*this, adaptor.getOperands());
+}
+
+OpFoldResult FloorModSIOp::fold(FoldAdaptor adaptor) {
+  return foldDivision<true, false>(*this, adaptor.getOperands());
+}
+
+template <bool floor>
+static LogicalResult foldDivisionPair(Operation *op,
+                                      ArrayRef<Attribute> operands,
+                                      SmallVectorImpl<OpFoldResult> &results) {
+  auto divided = divideConstants(operands, floor);
+  if (!divided)
+    return failure();
+  results.push_back(foldedMpz(op->getContext(), divided->first));
+  results.push_back(foldedMpz(op->getContext(), divided->second));
+  return success();
+}
+
+LogicalResult DivRemSIOp::fold(FoldAdaptor adaptor,
+                               SmallVectorImpl<OpFoldResult> &results) {
+  return foldDivisionPair<false>(*this, adaptor.getOperands(), results);
+}
+
+LogicalResult FloorDivModSIOp::fold(FoldAdaptor adaptor,
+                                    SmallVectorImpl<OpFoldResult> &results) {
+  return foldDivisionPair<true>(*this, adaptor.getOperands(), results);
+}
+
+OpFoldResult CmpIOp::fold(FoldAdaptor adaptor) {
+  std::optional<APInt> lhs = mpzOperand(adaptor.getLhs()),
+                       rhs = mpzOperand(adaptor.getRhs());
+  if (!lhs || !rhs)
+    return {};
+  auto [a, b] = widened(*lhs, *rhs, 0);
+  bool result = false;
+  switch (getPredicate()) {
+  case CmpIPredicate::eq:
+    result = a == b;
+    break;
+  case CmpIPredicate::ne:
+    result = a != b;
+    break;
+  case CmpIPredicate::slt:
+    result = a.slt(b);
+    break;
+  case CmpIPredicate::sle:
+    result = a.sle(b);
+    break;
+  case CmpIPredicate::sgt:
+    result = a.sgt(b);
+    break;
+  case CmpIPredicate::sge:
+    result = a.sge(b);
+    break;
+  }
+  return BoolAttr::get(getContext(), result);
+}
+
+// Whether a signed value fits the width as a signed or an unsigned integer.
+static bool fitsWidth(const APInt &value, unsigned width, bool isUnsigned) {
+  if (isUnsigned)
+    return !value.isNegative() && value.getActiveBits() <= width;
+  return value.getSignificantBits() <= width;
+}
+
+OpFoldResult TruncIOp::fold(FoldAdaptor adaptor) {
+  std::optional<APInt> value = mpzOperand(adaptor.getValue());
+  if (!value)
+    return {};
+  // A value outside the range a flag promises is poison, which is not folded.
+  unsigned width = getType().getIntOrFloatBitWidth();
+  auto flags = getOverflowFlags();
+  if ((bitEnumContainsAll(flags, arith::IntegerOverflowFlags::nsw) &&
+       !fitsWidth(*value, width, false)) ||
+      (bitEnumContainsAll(flags, arith::IntegerOverflowFlags::nuw) &&
+       !fitsWidth(*value, width, true)))
+    return {};
+  return IntegerAttr::get(getType(), value->sextOrTrunc(width));
+}
+
+LogicalResult TruncIOverflowOp::fold(FoldAdaptor adaptor,
+                                     SmallVectorImpl<OpFoldResult> &results) {
+  std::optional<APInt> value = mpzOperand(adaptor.getValue());
+  if (!value)
+    return failure();
+  unsigned width = getResult().getType().getIntOrFloatBitWidth();
+  results.push_back(
+      IntegerAttr::get(getResult().getType(), value->sextOrTrunc(width)));
+  results.push_back(
+      BoolAttr::get(getContext(), !fitsWidth(*value, width, getIsUnsigned())));
+  return success();
+}
+
+// Constants need no reference counting.
+LogicalResult RetainOp::canonicalize(RetainOp op, PatternRewriter &rewriter) {
+  if (!op.getValue().getDefiningOp<ConstantOp>())
+    return failure();
+  rewriter.eraseOp(op);
+  return success();
+}
+
+LogicalResult ReleaseOp::canonicalize(ReleaseOp op, PatternRewriter &rewriter) {
+  if (!op.getValue().getDefiningOp<ConstantOp>())
+    return failure();
+  rewriter.eraseOp(op);
+  return success();
+}
+
 LogicalResult ConstantOp::verify() {
   if (!isNarrowest(getValueAttr()))
     return emitOpError("requires a signless integer attribute of the narrowest "

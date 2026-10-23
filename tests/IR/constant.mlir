@@ -75,11 +75,12 @@ func.func @modes() -> (!rcgmp.mpz, !rcgmp.mpz<atomic>) {
   return %r, %c : !rcgmp.mpz, !rcgmp.mpz<atomic>
 }
 
-// Upstream folds for i1 constants do not apply to integer constants.
+// Upstream folds for i1 constants do not mistake integer constants for them,
+// but constants, which need no reference counting, may be selected.
 // CANON-LABEL: func.func @select
-// CANON: scf.if %{{.*}} -> (!rcgmp.mpz)
-// CANON: rcgmp.constant 0 : !rcgmp.mpz
-// CANON: rcgmp.constant -1 : !rcgmp.mpz
+// CANON-DAG: %[[M1:.*]] = rcgmp.constant -1 : !rcgmp.mpz
+// CANON-DAG: %[[ZERO:.*]] = rcgmp.constant 0 : !rcgmp.mpz
+// CANON: arith.select %arg0, %[[ZERO]], %[[M1]] : !rcgmp.mpz
 func.func @select(%p: i1) -> !rcgmp.mpz {
   %r = scf.if %p -> !rcgmp.mpz {
     %a = rcgmp.constant 0 : !rcgmp.mpz

@@ -4,6 +4,7 @@
 #include "RCGMP/IR/RCGMPTypes.h"
 
 #include <llvm/ADT/TypeSwitch.h>
+#include <mlir/Dialect/Arith/IR/Arith.h>
 #include <mlir/Dialect/LLVMIR/LLVMDialect.h>
 #include <mlir/IR/DialectImplementation.h>
 
@@ -34,6 +35,16 @@ void RCGMPDialect::initialize() {
 #define GET_ATTRDEF_LIST
 #include "RCGMP/IR/RCGMPAttrs.cpp.inc"
       >();
+}
+
+Operation *RCGMPDialect::materializeConstant(OpBuilder &builder,
+                                             Attribute value, Type type,
+                                             Location loc) {
+  if (auto mpz = dyn_cast<MpzValueAttr>(value); mpz && isa<MpzType>(type))
+    return ConstantOp::create(builder, loc, type, mpz.getValue());
+  if (isa<IntegerAttr>(value) && isa<IntegerType>(type))
+    return arith::ConstantOp::materialize(builder, value, type, loc);
+  return nullptr;
 }
 
 } // namespace mlir::rcgmp

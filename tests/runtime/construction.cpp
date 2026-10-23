@@ -21,10 +21,10 @@ void *retain_local(void *);
 void *retain_atomic(void *);
 void release_local(void *);
 void release_atomic(void *);
-void *from_min129();
-void *from_max129();
-void *from_signed_i1();
-void *from_unsigned_i1();
+void *from_min129(std::int64_t);
+void *from_max129(std::int64_t);
+void *from_signed_i1(std::int64_t);
+void *from_unsigned_i1(std::int64_t);
 }
 
 namespace {
@@ -65,17 +65,17 @@ TEST(Construction, FromUnsignedMaximum) {
 }
 
 TEST(Construction, FromWideIntegers) {
-  void *x = from_min129();
+  void *x = from_min129(0);
   EXPECT_THAT(x, Represents(-Integer::powerOfTwo(128)));
   release_local(x);
-  x = from_max129();
+  x = from_max129(0);
   EXPECT_THAT(x, Represents(Integer::powerOfTwo(129) - 1));
   release_local(x);
 }
 
 TEST(Construction, FromOneBit) {
-  EXPECT_THAT(from_signed_i1(), Represents(Integer(-1)));
-  EXPECT_THAT(from_unsigned_i1(), Represents(Integer(1)));
+  EXPECT_THAT(from_signed_i1(0), Represents(Integer(-1)));
+  EXPECT_THAT(from_unsigned_i1(0), Represents(Integer(1)));
 }
 
 // Zero is the immediate 0 regardless of the sign flag or zero words.
