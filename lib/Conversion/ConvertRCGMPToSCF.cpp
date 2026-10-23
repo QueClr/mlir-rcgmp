@@ -571,19 +571,19 @@ struct Truncation {
   Value overflow;
 };
 
-// Truncates the immediate in tagged bits. flags, which the integer satisfies,
-// carry over to the truncation.
+// Truncates the immediate in tagged bits. The truncation carries no overflow
+// flags: arith canonicalization rewrites trunci(shrsi) to trunci(shrui) and
+// keeps them, though the logical shift falsifies nsw for negative integers.
 Truncation truncateImmediate(PatternRewriter &rewriter, Location loc,
                              Value bits, IntegerType type, bool isUnsigned,
-                             bool withOverflow,
-                             arith::IntegerOverflowFlags flags) {
+                             bool withOverflow) {
   unsigned word = cast<IntegerType>(bits.getType()).getWidth();
   unsigned width = type.getWidth();
   auto two = arith::ConstantIntOp::create(rewriter, loc, 2, word);
   Value x = arith::ShRSIOp::create(rewriter, loc, bits, two);
   Value value = x;
   if (width < word)
-    value = arith::TruncIOp::create(rewriter, loc, type, x, flags);
+    value = arith::TruncIOp::create(rewriter, loc, type, x);
   else if (width > word)
     value = arith::ExtSIOp::create(rewriter, loc, type, x);
   if (!withOverflow)
@@ -721,8 +721,7 @@ struct TruncationLowering : OpRewritePattern<TruncOp> {
     if ((nsw && type.getWidth() <= width - 2) ||
         (nuw && type.getWidth() <= width - 3)) {
       rewriter.replaceOp(
-          op, truncateImmediate(rewriter, loc, bits, type, false, false, flags)
-                  .value);
+          op, truncateImmediate(rewriter, loc, bits, type, false, false).value);
       return success();
     }
     SmallVector<Type> types{type};
@@ -738,8 +737,8 @@ struct TruncationLowering : OpRewritePattern<TruncOp> {
       scf::YieldOp::create(rewriter, loc, results);
     };
     rewriter.setInsertionPointToStart(&branch.getThenRegion().front());
-    yield(truncateImmediate(rewriter, loc, bits, type, isUnsigned, withOverflow,
-                            flags));
+    yield(
+        truncateImmediate(rewriter, loc, bits, type, isUnsigned, withOverflow));
     rewriter.setInsertionPointToStart(&branch.getElseRegion().front());
     yield(truncateHeap(rewriter, loc, integer, word, type, isUnsigned,
                        withOverflow));

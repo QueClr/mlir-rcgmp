@@ -63,6 +63,8 @@ def RCGMP_MpzIsImmediateOp : RCGMPBridgeOp<"mpz.is_immediate", [Pure]> {
   let arguments = (ins RCGMP_MpzType:$value);
   let results = (outs I1:$result);
   let assemblyFormat = "$value attr-dict `:` type($value)";
+  let hasFolder = 1;
+  let hasCanonicalizer = 1;
 }
 
 def RCGMP_MpzFitsImmediateOp : RCGMPBridgeOp<"mpz.fits_imm", [Pure]> {
@@ -160,6 +162,7 @@ def RCGMP_MpzToBitsOp : RCGMPBridgeOp<"mpz.to_bits", [Pure]> {
   let arguments = (ins RCGMP_MpzType:$value);
   let results = (outs AnySignlessInteger:$result);
   let assemblyFormat = "$value attr-dict `:` type($value) `to` type($result)";
+  let hasFolder = 1;
   let hasVerifier = 1;
 }
 
@@ -175,6 +178,7 @@ def RCGMP_MpzFromBitsOp : RCGMPBridgeOp<"mpz.from_bits", [Pure]> {
   let arguments = (ins AnySignlessInteger:$value);
   let results = (outs RCGMP_MpzType:$result);
   let assemblyFormat = "$value attr-dict `:` type($value) `to` type($result)";
+  let hasFolder = 1;
   let hasVerifier = 1;
 }
 

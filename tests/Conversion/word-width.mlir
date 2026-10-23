@@ -146,7 +146,7 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<!llvm.ptr, dense<
   // skips the heap.
   // CHECK-LABEL: llvm.func @narrow
   // CHECK: llvm.ashr {{.*}} : i32
-  // CHECK: llvm.trunc {{.*}} overflow<nsw> : i32 to i16
+  // CHECK: llvm.trunc {{.*}} : i32 to i16
   // CHECK-NEXT: llvm.return
   func.func @narrow(%x: !rcgmp.mpz) -> i16 {
     %v = rcgmp.trunci %x overflow<nsw> : !rcgmp.mpz to i16

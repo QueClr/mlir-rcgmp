@@ -5,7 +5,7 @@
 // CHECK-LABEL: func.func @immediate_only
 // CHECK: %[[BITS:.*]] = rcgmp.bridge.mpz.to_bits %arg0
 // CHECK: %[[X:.*]] = arith.shrsi %[[BITS]]
-// CHECK: arith.trunci %[[X]] overflow<nsw> : i64 to i32
+// CHECK: arith.trunci %[[X]] : i64 to i32
 // CHECK-NOT: scf.if
 // CHECK: return
 func.func @immediate_only(%x: !rcgmp.mpz) -> i32 {

@@ -171,9 +171,17 @@ template <typename Derived> struct FastPathLowering : RewritePattern {
   }
 
 protected:
-  // Tests the immediate tag of every handle in bits.
+  // Tests the immediate tag of every handle whose bits are in bits. One
+  // handle is tested with rcgmp.bridge.mpz.is_immediate, as other operations
+  // test it. Several share one test of their bits ANDed together: separate
+  // tests, which LLVM merges with those of the slow path, lead it to lay out
+  // slower slow paths, such as that of rcgmp.cmpi.
   static Value allImmediate(PatternRewriter &rewriter, Location loc,
                             ValueRange bits) {
+    if (bits.size() == 1)
+      return bridge::MpzIsImmediateOp::create(
+          rewriter, loc,
+          bits.front().getDefiningOp<bridge::MpzToBitsOp>().getValue());
     Value common = bits.front();
     for (Value value : bits.drop_front())
       common = arith::AndIOp::create(rewriter, loc, common, value);

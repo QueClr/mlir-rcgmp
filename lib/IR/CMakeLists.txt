@@ -11,6 +11,7 @@ add_mlir_dialect_library(MLIRRCGMP
     MLIRSupport
     MLIRDataLayoutInterfaces
     MLIRLLVMDialect
+    MLIRSCFDialect
     MLIRInferTypeOpInterface
     MLIRSideEffectInterfaces
 )
