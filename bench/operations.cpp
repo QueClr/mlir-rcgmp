@@ -42,6 +42,8 @@ void *floormodsi(void *, void *);
 rcgmp_mpz_qr divremsi(void *, void *);
 std::int64_t trunci(void *);
 std::int64_t trunci_overflow(void *);
+std::int64_t trunci_release(void *);
+void *affine(void *);
 }
 
 namespace {
@@ -480,6 +482,36 @@ void registerTruncations() {
   }
 }
 
+// Sequences in which CSE and canonicalization of the lowered code share or
+// fold tag tests: a truncation and a release of one integer, and arithmetic
+// with constants, 3 * x + 5, on a shared operand.
+void registerSequences() {
+  for (auto [label, make] :
+       {std::pair{"/immediate", +[] { return immediate(smallLhs); }},
+        {"/heap", +[] { return heap(lhsWords); }}}) {
+    benchmark::RegisterBenchmark(
+        std::string("trunci, release") + label, [=](benchmark::State &state) {
+          void *x = make();
+          for (auto _ : state) {
+            retain(x);
+            benchmark::DoNotOptimize(x);
+            benchmark::DoNotOptimize(trunci_release(x));
+          }
+          release(x);
+        });
+    benchmark::RegisterBenchmark(std::string("muli, addi constants") + label,
+                                 [=](benchmark::State &state) {
+                                   void *x = make();
+                                   for (auto _ : state) {
+                                     retain(x);
+                                     benchmark::DoNotOptimize(x);
+                                     release(affine(x));
+                                   }
+                                   release(x);
+                                 });
+  }
+}
+
 void registerOthers() {
   static Integer smallX(smallLhs), smallY(smallRhs), heapX(lhsWords),
       heapY(rhsWords), five(5);
@@ -572,6 +604,7 @@ void registerOthers() {
 
 [[maybe_unused]] const int registered =
     (registerBinaries(), registerUnaries(), registerShifts(),
-     registerDivisions(), registerTruncations(), registerOthers(), 0);
+     registerDivisions(), registerTruncations(), registerSequences(),
+     registerOthers(), 0);
 
 } // namespace

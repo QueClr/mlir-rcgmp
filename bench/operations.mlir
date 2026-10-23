@@ -169,3 +169,15 @@ func.func @trunci_overflow(%x: !rcgmp.mpz) -> i64 {
   %r = arith.xori %v, %e : i64
   return %r : i64
 }
+func.func @trunci_release(%x: !rcgmp.mpz) -> i64 {
+  %v = rcgmp.trunci %x : !rcgmp.mpz to i64
+  rcgmp.release %x : !rcgmp.mpz
+  return %v : i64
+}
+func.func @affine(%x: !rcgmp.mpz) -> !rcgmp.mpz {
+  %three = rcgmp.constant 3 : !rcgmp.mpz
+  %five = rcgmp.constant 5 : !rcgmp.mpz
+  %p = rcgmp.muli %x, %three : !rcgmp.mpz
+  %r = rcgmp.addi %p, %five : !rcgmp.mpz
+  return %r : !rcgmp.mpz
+}
