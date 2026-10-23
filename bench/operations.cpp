@@ -480,6 +480,59 @@ void registerTruncations() {
   }
 }
 
+// Loops that grow a unique integer past its storage: repeated products with
+// a small immediate, and shifts left by a limb, next to GMP growing its
+// operand in place.
+void registerGrowth() {
+  constexpr int products = 64, shifts = 32;
+  constexpr std::intptr_t factor = 1000003;
+  constexpr std::int64_t limb = 64;
+  for (int counting = 0; counting < 2; ++counting) {
+    std::string suffix = suffixes[counting];
+    Binary multiply = counting ? muli_atomic : muli;
+    auto shift = counting ? shli_atomic : shli;
+    Counted counted = countings[counting];
+    benchmark::RegisterBenchmark("muli" + suffix + "/grow x64",
+                                 [=](benchmark::State &state) {
+                                   for (auto _ : state) {
+                                     void *x = heap(lhsWords);
+                                     for (int i = 0; i < products; ++i)
+                                       x = multiply(x, immediate(factor));
+                                     benchmark::DoNotOptimize(x);
+                                     counted.release(x);
+                                   }
+                                 });
+    benchmark::RegisterBenchmark("shli" + suffix + "/grow x32",
+                                 [=](benchmark::State &state) {
+                                   for (auto _ : state) {
+                                     void *x = heap(lhsWords);
+                                     for (int i = 0; i < shifts; ++i)
+                                       x = shift(x, limb);
+                                     benchmark::DoNotOptimize(x);
+                                     counted.release(x);
+                                   }
+                                 });
+  }
+  benchmark::RegisterBenchmark("gmp mul_ui/grow x64",
+                               [](benchmark::State &state) {
+                                 for (auto _ : state) {
+                                   Integer x(lhsWords);
+                                   for (int i = 0; i < products; ++i)
+                                     mpz_mul_ui(x.value, x.value, factor);
+                                   benchmark::DoNotOptimize(x.value);
+                                 }
+                               });
+  benchmark::RegisterBenchmark("gmp mul_2exp/grow x32",
+                               [](benchmark::State &state) {
+                                 for (auto _ : state) {
+                                   Integer x(lhsWords);
+                                   for (int i = 0; i < shifts; ++i)
+                                     mpz_mul_2exp(x.value, x.value, limb);
+                                   benchmark::DoNotOptimize(x.value);
+                                 }
+                               });
+}
+
 void registerOthers() {
   static Integer smallX(smallLhs), smallY(smallRhs), heapX(lhsWords),
       heapY(rhsWords), five(5);
@@ -572,6 +625,7 @@ void registerOthers() {
 
 [[maybe_unused]] const int registered =
     (registerBinaries(), registerUnaries(), registerShifts(),
-     registerDivisions(), registerTruncations(), registerOthers(), 0);
+     registerDivisions(), registerTruncations(), registerGrowth(),
+     registerOthers(), 0);
 
 } // namespace

@@ -16,13 +16,18 @@ struct alignas(std::max_align_t) AllocationHeader {
   std::size_t alignment;
 };
 
-std::atomic<std::size_t> totalAllocations, totalDeallocations;
+std::atomic<std::size_t> totalAllocations, totalReallocations,
+    totalDeallocations;
 
-// Counts allocations and deallocations since its construction.
+// Counts allocations, reallocations, and deallocations since its
+// construction.
 export class AllocationCounter {
 public:
   std::size_t allocations() const {
     return totalAllocations - allocationsBefore;
+  }
+  std::size_t reallocations() const {
+    return totalReallocations - reallocationsBefore;
   }
   std::size_t deallocations() const {
     return totalDeallocations - deallocationsBefore;
@@ -31,6 +36,7 @@ public:
 
 private:
   std::size_t allocationsBefore = totalAllocations;
+  std::size_t reallocationsBefore = totalReallocations;
   std::size_t deallocationsBefore = totalDeallocations;
 };
 
@@ -47,6 +53,21 @@ void *rcgmp_allocate(std::size_t size, std::size_t alignment) {
     return nullptr;
   *header = {size, alignment};
   ++rcgmp::test::totalAllocations;
+  return header + 1;
+}
+
+void *rcgmp_reallocate(void *pointer, std::size_t oldSize, std::size_t size,
+                       std::size_t alignment) {
+  using rcgmp::test::AllocationHeader;
+  auto *header = static_cast<AllocationHeader *>(pointer) - 1;
+  EXPECT_EQ(header->size, oldSize);
+  EXPECT_EQ(header->alignment, alignment);
+  header = static_cast<AllocationHeader *>(
+      std::realloc(header, sizeof(AllocationHeader) + size));
+  if (!header)
+    return nullptr;
+  header->size = size;
+  ++rcgmp::test::totalReallocations;
   return header + 1;
 }
 

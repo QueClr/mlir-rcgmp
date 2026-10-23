@@ -50,9 +50,14 @@ Handle shiftLeft(Handle value, std::uintptr_t amount, bool reuse) {
   std::size_t count = heap.count();
   std::size_t required =
       std::add_sat(std::add_sat(count, limbs), std::size_t{bits != 0});
-  Mpz &result = shiftDestination(value, reuse, required);
+  bool negative = heap.negative();
+  // A reusable integer grows to hold the result, possibly moving.
+  Mpz &result = !reuse ? allocateResult(required)
+                : heap.capacity >= required
+                    ? heap
+                    : grow(heap, std::add_sat(required, required / 2 + 1));
   Limb *out = result.limbs().data();
-  const Limb *in = heap.limbs().data();
+  const Limb *in = (reuse ? result : heap).limbs().data();
   // Both move limbs to higher addresses, which the shared storage of a reused
   // operand permits.
   std::size_t total = limbs + count;
@@ -63,8 +68,8 @@ Handle shiftLeft(Handle value, std::uintptr_t amount, bool reuse) {
     std::copy_backward(in, in + count, out + total);
   }
   std::fill(out, out + limbs, Limb{0});
-  result.setMagnitude(total, heap.negative());
-  if (&result != &heap)
+  result.setMagnitude(total, negative);
+  if (!reuse)
     release<counting>(value);
   // The top limb is nonzero, and no multiple of a heap magnitude fits an
   // immediate.

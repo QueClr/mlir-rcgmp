@@ -23,10 +23,13 @@ Handle addSmall(Handle heap, bool reuse, bool negative, Limb small,
   Mpz &value = heap.heap();
   std::size_t count = value.count();
   bool sameSign = negative == smallNegative;
-  Mpz &result = reuse && value.capacity >= count + sameSign
+  std::size_t required = count + sameSign;
+  // A reusable integer grows to hold the result, possibly moving.
+  Mpz &result = !reuse ? allocateResult(required)
+                : value.capacity >= required
                     ? value
-                    : allocateResult(count + sameSign);
-  const Limb *in = value.limbs().data();
+                    : grow(value, required + required / 2 + 1);
+  const Limb *in = (reuse ? result : value).limbs().data();
   Limb *out = result.limbs().data();
   if (sameSign) {
     out[count] = mpn_add_1(out, in, count, small);
@@ -35,7 +38,7 @@ Handle addSmall(Handle heap, bool reuse, bool negative, Limb small,
     mpn_sub_1(out, in, count, small);
     count -= out[count - 1] == 0;
   }
-  if (&result != &value)
+  if (!reuse)
     release<counting>(heap);
   if (count <= 1)
     if (std::optional<Handle> immediate =
@@ -91,7 +94,8 @@ Handle addOrSubtract(Handle lhs, Handle rhs, Reuse reuse) {
   }
 
   std::size_t count = a.count();
-  Mpz &result = destination(lhs, rhs, reuse, count + sameSign);
+  Mpz &result =
+      growingDestination(lhs, rhs, reuse, count + sameSign, left, right);
   std::span<Limb> out = result.limbs();
   const Limb *x = a.limbs.data(), *y = b.limbs.data();
   if (sameSign) {

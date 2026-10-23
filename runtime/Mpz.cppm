@@ -110,6 +110,24 @@ export Mpz &allocate(std::size_t capacity) {
   return *::new(storage) Mpz{.references = 1, .size = 0, .capacity = capacity};
 }
 
+// Grows a uniquely owned heap integer to room for capacity limbs, keeping its
+// value but possibly moving it. Terminates if reallocation fails.
+export Mpz &grow(Mpz &value, std::size_t capacity) {
+  constexpr std::size_t maxCapacity = std::min<std::size_t>(
+      std::numeric_limits<std::intptr_t>::max(),
+      (std::numeric_limits<std::size_t>::max() - sizeof(Mpz)) / sizeof(Limb));
+  if (capacity > maxCapacity)
+    std::abort();
+  void *storage =
+      rcgmp_reallocate(&value, sizeof(Mpz) + value.capacity * sizeof(Limb),
+                       sizeof(Mpz) + capacity * sizeof(Limb), alignof(Mpz));
+  if (!storage)
+    std::abort();
+  Mpz &grown = *static_cast<Mpz *>(storage);
+  grown.capacity = capacity;
+  return grown;
+}
+
 // Only for a heap integer whose final release has already completed.
 export template <Counting counting> void deallocate(Mpz &value) {
   // Make the other owners' accesses, ordered by their releases, happen first.

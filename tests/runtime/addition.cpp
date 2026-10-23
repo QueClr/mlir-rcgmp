@@ -125,8 +125,10 @@ TEST_P(AdditionTest, GrowsPastSpareLimb) {
   EXPECT_EQ(sum, x);
   EXPECT_EQ(counter.allocations(), 0u);
   EXPECT_THAT(sum, Represents(expected));
+  // The unique sum grows in place of a new allocation.
   sum = add(sum, Handle::immediate(1).pointer(), counting);
-  EXPECT_EQ(counter.allocations(), 1u);
+  EXPECT_EQ(counter.allocations(), 0u);
+  EXPECT_EQ(counter.reallocations(), 1u);
   EXPECT_THAT(sum, Represents(expected + 1));
   rcgmp_mpz_release(sum, atomic);
 }

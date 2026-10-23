@@ -24,7 +24,8 @@ Handle multiply(Handle lhs, Handle rhs, Reuse reuse) {
   std::size_t count = a.count() + b.count();
   // mpn_mul_1 permits exact overlap. General mpn_mul and mpn_sqr do not.
   bool scalar = b.count() == 1;
-  Mpz &result = destination(lhs, rhs, scalar ? reuse : Reuse{}, count);
+  Mpz &result = growingDestination(lhs, rhs, scalar ? reuse : Reuse{}, count,
+                                   left, right);
   std::span<Limb> out = result.limbs();
   const Limb *x = a.limbs.data();
   if (scalar) {

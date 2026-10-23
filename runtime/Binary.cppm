@@ -57,6 +57,33 @@ inline Mpz &allocateResult(std::size_t required) {
   return allocate(std::add_sat(required, required / 2 + 1));
 }
 
+// Grows a reusable operand to room for a result of required limbs, with the
+// headroom of a new result. The operand's handle and view follow its possibly
+// moved storage.
+inline Mpz &growOperand(Handle &operand, Magnitude &view,
+                        std::size_t required) {
+  Mpz &grown = grow(operand.heap(), std::add_sat(required, required / 2 + 1));
+  operand = Handle(grown);
+  view.limbs = {grown.limbs().data(), view.count()};
+  return grown;
+}
+
+// Returns storage for a result of up to required limbs: a reusable operand
+// with enough capacity, or one grown to have it, or else a new integer.
+inline Mpz &growingDestination(Handle &lhs, Handle &rhs, Reuse reuse,
+                               std::size_t required, Magnitude &left,
+                               Magnitude &right) {
+  if (reuse.lhs && lhs.heap().capacity >= required)
+    return lhs.heap();
+  if (reuse.rhs && rhs.heap().capacity >= required)
+    return rhs.heap();
+  if (reuse.lhs)
+    return growOperand(lhs, left, required);
+  if (reuse.rhs)
+    return growOperand(rhs, right, required);
+  return allocateResult(required);
+}
+
 // Returns storage for a result of up to required limbs: a reusable operand with
 // enough capacity, or else a new integer.
 inline Mpz &destination(Handle lhs, Handle rhs, Reuse reuse,
