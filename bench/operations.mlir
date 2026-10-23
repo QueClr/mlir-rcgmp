@@ -123,3 +123,19 @@ func.func @successor(%n: !rcgmp.mpz) -> i64 {
   }
   return %r : i64
 }
+func.func @shli(%x: !rcgmp.mpz, %n: i64) -> !rcgmp.mpz {
+  %r = rcgmp.shli %x, %n : !rcgmp.mpz, i64
+  return %r : !rcgmp.mpz
+}
+func.func @shrsi(%x: !rcgmp.mpz, %n: i64) -> !rcgmp.mpz {
+  %r = rcgmp.shrsi %x, %n : !rcgmp.mpz, i64
+  return %r : !rcgmp.mpz
+}
+func.func @shli_atomic(%x: !rcgmp.mpz<atomic>, %n: i64) -> !rcgmp.mpz<atomic> {
+  %r = rcgmp.shli %x, %n : !rcgmp.mpz<atomic>, i64
+  return %r : !rcgmp.mpz<atomic>
+}
+func.func @shrsi_atomic(%x: !rcgmp.mpz<atomic>, %n: i64) -> !rcgmp.mpz<atomic> {
+  %r = rcgmp.shrsi %x, %n : !rcgmp.mpz<atomic>, i64
+  return %r : !rcgmp.mpz<atomic>
+}

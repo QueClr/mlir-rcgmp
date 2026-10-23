@@ -54,6 +54,13 @@ void *rcgmp_mpz_neg_atomic(void *value, uint32_t reuse);
 void *rcgmp_mpz_abs(void *value, uint32_t reuse);
 void *rcgmp_mpz_abs_atomic(void *value, uint32_t reuse);
 
+// Shift value by amount bits, with the same ownership and reuse contract as
+// the unary operations. Shifting right rounds toward negative infinity.
+void *rcgmp_mpz_shl(void *value, uintptr_t amount, uint32_t reuse);
+void *rcgmp_mpz_shl_atomic(void *value, uintptr_t amount, uint32_t reuse);
+void *rcgmp_mpz_shr(void *value, uintptr_t amount, uint32_t reuse);
+void *rcgmp_mpz_shr_atomic(void *value, uintptr_t amount, uint32_t reuse);
+
 // Borrow both operands and return a negative, zero, or positive value as lhs is
 // less than, equal to, or greater than rhs. Reference counts are unchanged.
 // Both entry points share one implementation.

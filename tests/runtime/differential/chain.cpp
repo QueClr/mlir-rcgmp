@@ -6,6 +6,7 @@
 #include <gtest/gtest.h>
 
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <ranges>
 #include <utility>
@@ -23,12 +24,13 @@ using namespace rcgmp::test;
 
 // A step of a chain applies an operation to the result so far and either a
 // fresh operand, one related to the result so far, or a compiled constant,
-// then possibly a unary operation.
+// then possibly a unary operation and a shift.
 struct Step {
   Operator op;
   std::variant<Integer, Relation, Constant> operand;
   std::size_t spare;
   std::optional<UnaryOperator> unary;
+  std::optional<Shift> shift;
 };
 
 // Each chain feeds every result into the next operation as its uniquely owned
@@ -71,6 +73,16 @@ void ChainsMatchGmp(Counting counting, const Operand &start,
           << " of " << steps.size() << ": operand = " << accumulator;
       accumulator = std::move(expected);
     }
+    if (step.shift) {
+      auto [op, amount] = *step.shift;
+      operation(op).oracle(expected, accumulator, amount);
+      result = operation(op).compiled[index](result, amount);
+      ASSERT_THAT(result, Represents(expected))
+          << operation(op).name << " by " << amount << " at step "
+          << position + 1 << " of " << steps.size()
+          << ": operand = " << accumulator;
+      accumulator = std::move(expected);
+    }
   }
   releases[index](result);
   EXPECT_TRUE(balance.balanced())
@@ -84,7 +96,10 @@ FUZZ_TEST(Differential, ChainsMatchGmp)
                          fuzztest::VariantOf(
                              AnyInteger(), AnyRelation(),
                              fuzztest::StructOf<Constant>(AnyConstant())),
-                         AnySpare(), fuzztest::OptionalOf(AnyUnaryOperator())))
+                         AnySpare(), fuzztest::OptionalOf(AnyUnaryOperator()),
+                         fuzztest::OptionalOf(fuzztest::StructOf<Shift>(
+                             AnyShiftOperator(),
+                             fuzztest::InRange<std::uint64_t>(0, 2 * word)))))
                      .WithMinSize(8)
                      .WithMaxSize(16));
 

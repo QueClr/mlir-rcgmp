@@ -6,6 +6,8 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<!llvm.ptr, dense<
   // CHECK-DAG: llvm.mlir.global private unnamed_addr constant @__rcgmp_mpz_neg_100000000(dense<[0, -2, 2, 0, 1]> : tensor<5xi32>) {addr_space = 0 : i32, alignment = 4 : i64} : !llvm.array<5 x i32>
   // CHECK-DAG: llvm.mlir.global private unnamed_addr constant @__rcgmp_mpz_300000002(dense<[0, 2, 2, 2, 3]> : tensor<5xi32>) {addr_space = 0 : i32, alignment = 4 : i64} : !llvm.array<5 x i32>
   // CHECK-DAG: llvm.mlir.global private unnamed_addr constant @__rcgmp_mpz_2000000000000000(dense<[0, 2, 2, 0, 536870912]> : tensor<5xi32>) {addr_space = 0 : i32, alignment = 4 : i64} : !llvm.array<5 x i32>
+  // CHECK-DAG: llvm.func @rcgmp_mpz_shl(!llvm.ptr, i32, i32) -> !llvm.ptr
+  // CHECK-DAG: llvm.func @rcgmp_mpz_shr(!llvm.ptr, i32, i32) -> !llvm.ptr
   // CHECK-LABEL: llvm.func @constants
   // CHECK: llvm.mlir.constant(2147483645 : i32)
   // CHECK: llvm.mlir.addressof @__rcgmp_mpz_20000000
@@ -106,6 +108,28 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<!llvm.ptr, dense<
   // CHECK: llvm.icmp "ne"
   func.func @neg(%x: !rcgmp.mpz) -> !rcgmp.mpz {
     %r = rcgmp.negi %x : !rcgmp.mpz
+    return %r : !rcgmp.mpz
+  }
+  // Amounts saturate or extend to the handle width, which the runtime receives,
+  // and the fast path clamps them below it.
+  // CHECK-LABEL: llvm.func @shl
+  // CHECK: %[[MAX:.*]] = llvm.mlir.constant(4294967295 : i64)
+  // CHECK: %[[SATURATED:.*]] = llvm.intr.umin(%arg1, %[[MAX]]) : (i64, i64) -> i64
+  // CHECK: %[[AMOUNT:.*]] = llvm.trunc %[[SATURATED]] : i64 to i32
+  // CHECK: llvm.mlir.constant(31 : i32)
+  // CHECK: llvm.shl {{.*}} : i32
+  // CHECK: llvm.call @rcgmp_mpz_shl(%arg0, %[[AMOUNT]], %{{.*}}) : (!llvm.ptr, i32, i32)
+  func.func @shl(%x: !rcgmp.mpz, %n: i64) -> !rcgmp.mpz {
+    %r = rcgmp.shli %x, %n : !rcgmp.mpz, i64
+    return %r : !rcgmp.mpz
+  }
+  // CHECK-LABEL: llvm.func @shr
+  // CHECK: %[[AMOUNT:.*]] = llvm.zext %arg1 : i8 to i32
+  // CHECK: llvm.mlir.constant(31 : i32)
+  // CHECK: llvm.ashr {{.*}} : i32
+  // CHECK: llvm.call @rcgmp_mpz_shr(%arg0, %[[AMOUNT]], %{{.*}}) : (!llvm.ptr, i32, i32)
+  func.func @shr(%x: !rcgmp.mpz, %n: i8) -> !rcgmp.mpz {
+    %r = rcgmp.shrsi %x, %n : !rcgmp.mpz, i8
     return %r : !rcgmp.mpz
   }
   // Limbs and tagged offsets follow the handle width: 2^32 + 1 has two 32-bit

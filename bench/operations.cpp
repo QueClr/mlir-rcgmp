@@ -27,6 +27,8 @@ RCGMP_ENTRY(void *, xori, void *, void *)
 RCGMP_ENTRY(void *, noti, void *)
 RCGMP_ENTRY(void *, negi, void *)
 RCGMP_ENTRY(void *, absi, void *)
+RCGMP_ENTRY(void *, shli, void *, std::int64_t)
+RCGMP_ENTRY(void *, shrsi, void *, std::int64_t)
 RCGMP_ENTRY(std::int32_t, cmpi, void *, void *)
 RCGMP_ENTRY(void *, from_int, std::int64_t)
 RCGMP_ENTRY(void *, retain, void *)
@@ -256,6 +258,99 @@ void registerUnaries() {
   }
 }
 
+struct ShiftCase {
+  const char *name;
+  std::array<void *(*)(void *, std::int64_t), 2> compiled;
+  void (*gmp)(mpz_ptr, mpz_srcptr, mp_bitcnt_t);
+  // Whether shifting an immediate can leave the immediate range.
+  bool overflows;
+};
+
+const std::array<ShiftCase, 2> shiftCases{{
+    {"shli", {shli, shli_atomic}, mpz_mul_2exp, true},
+    {"shrsi", {shrsi, shrsi_atomic}, mpz_fdiv_q_2exp, false},
+}};
+
+// A few bits, and enough to move smallLhs out of the immediate range.
+constexpr std::int64_t smallShift = 5, overflowingShift = 50;
+
+void registerShifts() {
+  static Integer smallX(smallLhs), heapX(lhsWords);
+  for (const ShiftCase &op : shiftCases) {
+    for (int counting = 0; counting < 2; ++counting) {
+      std::string name = std::string(op.name) + suffixes[counting];
+      auto apply = op.compiled[counting];
+      Counted counted = countings[counting];
+      for (auto [label, amount] :
+           {std::pair{"/immediate", smallShift},
+            {"/immediate overflowing", overflowingShift}}) {
+        if (amount == overflowingShift && !op.overflows)
+          continue;
+        benchmark::RegisterBenchmark(name + label,
+                                     [=](benchmark::State &state) {
+                                       void *x = immediate(smallLhs);
+                                       for (auto _ : state) {
+                                         benchmark::DoNotOptimize(x);
+                                         counted.release(apply(x, amount));
+                                       }
+                                     });
+      }
+      benchmark::RegisterBenchmark(name + "/shared heap",
+                                   [=](benchmark::State &state) {
+                                     void *x = heap(lhsWords);
+                                     for (auto _ : state) {
+                                       counted.retain(x);
+                                       counted.release(apply(x, smallShift));
+                                     }
+                                     counted.release(x);
+                                   });
+    }
+    std::string gmp = std::string("gmp ") + op.name;
+    auto apply = op.gmp;
+    for (auto [label, operand, amount] :
+         {std::tuple{"/immediate", &smallX, smallShift},
+          {"/immediate overflowing", &smallX, overflowingShift},
+          {"/shared heap", &heapX, smallShift}}) {
+      if (amount == overflowingShift && !op.overflows)
+        continue;
+      benchmark::RegisterBenchmark(gmp + label, [=](benchmark::State &state) {
+        for (auto _ : state) {
+          mpz_t result;
+          mpz_init(result);
+          apply(result, operand->value, amount);
+          benchmark::DoNotOptimize(result);
+          mpz_clear(result);
+        }
+      });
+    }
+  }
+  // Shifting left and back restores a unique heap operand in place.
+  for (int counting = 0; counting < 2; ++counting) {
+    auto left = shiftCases[0].compiled[counting];
+    auto right = shiftCases[1].compiled[counting];
+    Counted counted = countings[counting];
+    benchmark::RegisterBenchmark(std::string("shli, shrsi") +
+                                     suffixes[counting] + "/unique heap",
+                                 [=](benchmark::State &state) {
+                                   void *x = heap(lhsWords);
+                                   for (auto _ : state) {
+                                     x = right(left(x, smallShift), smallShift);
+                                     benchmark::DoNotOptimize(x);
+                                   }
+                                   counted.release(x);
+                                 });
+  }
+  benchmark::RegisterBenchmark(
+      "gmp mul_2exp, fdiv_q_2exp/unique heap", [](benchmark::State &state) {
+        Integer x(lhsWords);
+        for (auto _ : state) {
+          mpz_mul_2exp(x.value, x.value, smallShift);
+          mpz_fdiv_q_2exp(x.value, x.value, smallShift);
+          benchmark::DoNotOptimize(x.value);
+        }
+      });
+}
+
 void registerOthers() {
   static Integer smallX(smallLhs), smallY(smallRhs), heapX(lhsWords),
       heapY(rhsWords), five(5);
@@ -346,7 +441,7 @@ void registerOthers() {
         });
 }
 
-[[maybe_unused]] const int registered =
-    (registerBinaries(), registerUnaries(), registerOthers(), 0);
+[[maybe_unused]] const int registered = (registerBinaries(), registerUnaries(),
+                                         registerShifts(), registerOthers(), 0);
 
 } // namespace
