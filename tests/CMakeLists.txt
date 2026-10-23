@@ -68,6 +68,12 @@ function(rcgmp_gtest target)
   add_dependencies(check-rcgmp ${target})
 endfunction()
 
+# Folds of operations on constants, compared with GMP.
+add_executable(rcgmp-fold unit/FoldTest.cpp)
+target_link_libraries(rcgmp-fold PRIVATE MLIRRCGMP RCGMPTesting)
+set_target_properties(rcgmp-fold PROPERTIES CXX_STANDARD 26)
+rcgmp_gtest(rcgmp-fold)
+
 add_executable(rcgmp-gmp-link runtime/gmp-link.cpp)
 target_link_libraries(rcgmp-gmp-link PRIVATE GMP::GMP)
 rcgmp_gtest(rcgmp-gmp-link)

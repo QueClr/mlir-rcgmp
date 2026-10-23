@@ -76,27 +76,36 @@ func.func @release_atomic(%x: !rcgmp.mpz<atomic>) {
   rcgmp.release %x : !rcgmp.mpz<atomic>
   return
 }
-// Wider inputs pass their magnitude words in memory.
+// Wider inputs pass their magnitude words in memory. Each input is offset by
+// a zero argument, so that folding leaves the conversion to the runtime.
 // LLVM-LABEL: llvm.func @from_min129
 // LLVM: llvm.alloca
 // LLVM: llvm.call @rcgmp_mpz_from_words
-func.func @from_min129() -> !rcgmp.mpz {
-  %x = arith.constant -340282366920938463463374607431768211456 : i129
+func.func @from_min129(%zero: i64) -> !rcgmp.mpz {
+  %c = arith.constant -340282366920938463463374607431768211456 : i129
+  %z = arith.extui %zero : i64 to i129
+  %x = arith.addi %c, %z : i129
   %r = rcgmp.extsi %x : i129 to !rcgmp.mpz
   return %r : !rcgmp.mpz
 }
-func.func @from_max129() -> !rcgmp.mpz {
-  %x = arith.constant 680564733841876926926749214863536422911 : i129
+func.func @from_max129(%zero: i64) -> !rcgmp.mpz {
+  %c = arith.constant 680564733841876926926749214863536422911 : i129
+  %z = arith.extui %zero : i64 to i129
+  %x = arith.addi %c, %z : i129
   %r = rcgmp.extui %x : i129 to !rcgmp.mpz
   return %r : !rcgmp.mpz
 }
-func.func @from_signed_i1() -> !rcgmp.mpz {
-  %x = arith.constant true
+func.func @from_signed_i1(%zero: i64) -> !rcgmp.mpz {
+  %c = arith.constant true
+  %z = arith.trunci %zero : i64 to i1
+  %x = arith.ori %c, %z : i1
   %r = rcgmp.extsi %x : i1 to !rcgmp.mpz
   return %r : !rcgmp.mpz
 }
-func.func @from_unsigned_i1() -> !rcgmp.mpz {
-  %x = arith.constant true
+func.func @from_unsigned_i1(%zero: i64) -> !rcgmp.mpz {
+  %c = arith.constant true
+  %z = arith.trunci %zero : i64 to i1
+  %x = arith.ori %c, %z : i1
   %r = rcgmp.extui %x : i1 to !rcgmp.mpz
   return %r : !rcgmp.mpz
 }

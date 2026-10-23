@@ -15,6 +15,7 @@ def RCGMPDialect : Dialect {
   }];
   let useDefaultTypePrinterParser = 1;
   let useDefaultAttributePrinterParser = 1;
+  let hasConstantMaterializer = 1;
   let dependentDialects = ["::mlir::LLVM::LLVMDialect",
                            "::mlir::arith::ArithDialect"];
 }

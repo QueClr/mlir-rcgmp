@@ -20,6 +20,7 @@ class RCGMP_ExtendOp<string name, string interpretation>
     The input is interpreted as }] # interpretation # [{, of any
     integer bit width. The result owns one reference.
   }];
+  let hasFolder = 1;
 }
 
 def RCGMP_ExtSIOp : RCGMP_ExtendOp<"extsi", "signed two's complement"> {
@@ -30,7 +31,7 @@ def RCGMP_ExtUIOp : RCGMP_ExtendOp<"extui", "unsigned"> {
   let summary = "Create one owned integer by zero-extending a fixed-width integer";
 }
 
-def RCGMP_ConstantOp : RCGMPOp<"constant", [Pure]> {
+def RCGMP_ConstantOp : RCGMPOp<"constant", [ConstantLike, Pure]> {
   let summary = "Produce an integer constant that needs no reference counting";
   let description = [{
     The value is a signed integer of arbitrary width. Its attribute uses the
@@ -52,6 +53,7 @@ def RCGMP_ConstantOp : RCGMPOp<"constant", [Pure]> {
   let assemblyFormat = "custom<SignedInteger>($value) attr-dict `:` type($result)";
   let builders = [OpBuilder<(ins "Type":$type, "const llvm::APInt &":$value)>];
   let hasVerifier = 1;
+  let hasFolder = 1;
 }
 
 def RCGMP_RetainOp : RCGMPOp<"retain", [RCGMP_NotSpeculatable]> {
@@ -62,6 +64,7 @@ def RCGMP_RetainOp : RCGMPOp<"retain", [RCGMP_NotSpeculatable]> {
   let arguments = (ins Arg<RCGMP_MpzType, "retained integer",
                            [MemRead, MemWrite]>:$value);
   let assemblyFormat = "$value attr-dict `:` type($value)";
+  let hasCanonicalizeMethod = 1;
 }
 
 def RCGMP_ReleaseOp : RCGMPOp<"release", [RCGMP_NotSpeculatable]> {
@@ -69,6 +72,7 @@ def RCGMP_ReleaseOp : RCGMPOp<"release", [RCGMP_NotSpeculatable]> {
   let arguments = (ins Arg<RCGMP_MpzType, "released integer",
                            RCGMP_ConsumedEffects>:$value);
   let assemblyFormat = "$value attr-dict `:` type($value)";
+  let hasCanonicalizeMethod = 1;
 }
 
 def RCGMP_AddIOp : RCGMPOp<"addi", [SameOperandsAndResultType, Commutative,
@@ -85,6 +89,7 @@ def RCGMP_AddIOp : RCGMPOp<"addi", [SameOperandsAndResultType, Commutative,
       Arg<RCGMP_MpzType, "consumed rhs", RCGMP_ConsumedEffects>:$rhs);
   let results = (outs Res<RCGMP_MpzType, "new integer", [MemAlloc]>:$result);
   let assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($result)";
+  let hasFolder = 1;
 }
 
 class RCGMP_BinaryOp<string name, string semantics, list<Trait> traits = []>
@@ -100,6 +105,7 @@ class RCGMP_BinaryOp<string name, string semantics, list<Trait> traits = []>
     require two references. The result owns one reference. A uniquely owned
     operand may supply result storage; shared operands retain their values.
   }] # semantics;
+  let hasFolder = 1;
 }
 
 def RCGMP_SubIOp : RCGMP_BinaryOp<"subi", [{
@@ -146,6 +152,7 @@ class RCGMP_UnaryOp<string name, string semantics>
     reference. A uniquely owned operand may supply result storage; a shared
     operand retains its value.
   }] # semantics;
+  let hasFolder = 1;
 }
 
 def RCGMP_NotIOp : RCGMP_UnaryOp<"noti", [{
@@ -182,6 +189,7 @@ class RCGMP_ShiftOp<string name, string semantics>
     reference. A uniquely owned operand may supply result storage; a shared
     operand retains its value. The amount is an unsigned number of bits.
   }] # semantics;
+  let hasFolder = 1;
 }
 
 def RCGMP_ShLIOp : RCGMP_ShiftOp<"shli", [{
@@ -223,6 +231,7 @@ class RCGMP_DivisionOp<string name, string semantics>
     $lhs `,` $rhs (`assume_nonzero` $assumeNonzero^)? attr-dict `:` type($result)
   }];
   let description = RCGMP_DivisionDescription # semantics;
+  let hasFolder = 1;
 }
 
 def RCGMP_DivSIOp : RCGMP_DivisionOp<"divsi", [{
@@ -259,6 +268,7 @@ class RCGMP_DivisionPairOp<string name, string semantics>
     $lhs `,` $rhs (`assume_nonzero` $assumeNonzero^)? attr-dict `:` type($quotient)
   }];
   let description = RCGMP_DivisionDescription # semantics;
+  let hasFolder = 1;
 }
 
 def RCGMP_DivRemSIOp : RCGMP_DivisionPairOp<"divremsi", [{
@@ -301,6 +311,7 @@ def RCGMP_CmpIOp : RCGMPOp<"cmpi", [SameTypeOperands, RCGMP_NotSpeculatable]> {
       Arg<RCGMP_MpzType, "borrowed rhs", [MemRead]>:$rhs);
   let results = (outs I1:$result);
   let assemblyFormat = "$predicate `,` $lhs `,` $rhs attr-dict `:` type($lhs)";
+  let hasFolder = 1;
 }
 
 def RCGMP_TruncIOp : RCGMPOp<"trunci", [RCGMP_NotSpeculatable]> {
@@ -326,6 +337,7 @@ def RCGMP_TruncIOp : RCGMPOp<"trunci", [RCGMP_NotSpeculatable]> {
     $value (`overflow` `` $overflowFlags^)? attr-dict `:` type($value) `to`
     type($result)
   }];
+  let hasFolder = 1;
 }
 
 def RCGMP_TruncIOverflowOp : RCGMPOp<"trunci_overflow",
@@ -347,6 +359,7 @@ def RCGMP_TruncIOverflowOp : RCGMPOp<"trunci_overflow",
     $value (`unsigned` $isUnsigned^)? attr-dict `:` type($value) `to`
     type($result)
   }];
+  let hasFolder = 1;
 }
 
 def RCGMP_MatchOp : RCGMPOp<"match", [RCGMP_NotSpeculatable,

@@ -21,4 +21,17 @@ def RCGMP_ArmAttr : AttrDef<RCGMPDialect, "Arm"> {
   let genVerifyDecl = 1;
 }
 
+def RCGMP_MpzValueAttr : AttrDef<RCGMPDialect, "MpzValue"> {
+  let mnemonic = "value";
+  let summary = "The value of a constant integer, as folding represents it";
+  let description = [{
+    Folding gives the value of a constant `!rcgmp.mpz` this attribute rather
+    than a builtin integer attribute, whose type would differ from the value's:
+    patterns that match builtin integer constants, such as zero or one, must
+    not mistake it for a fixed-width integer.
+  }];
+  let parameters = (ins APIntParameter<"">:$value);
+  let assemblyFormat = "`<` $value `>`";
+}
+
 #endif
