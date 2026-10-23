@@ -106,12 +106,13 @@ add_executable(rcgmp-differential
   runtime/differential/compare.cpp runtime/differential/construction.cpp
   runtime/differential/counting.cpp runtime/differential/division.cpp
   runtime/differential/match.cpp
-  runtime/differential/shift.cpp runtime/differential/unary.cpp
+  runtime/differential/shift.cpp runtime/differential/truncation.cpp
+  runtime/differential/unary.cpp
   ${CMAKE_CURRENT_BINARY_DIR}/runtime/compare.o)
 target_sources(rcgmp-differential PRIVATE FILE_SET CXX_MODULES FILES
   runtime/differential/Differential.cppm)
 foreach(name binary constant counting division extend match shift
-    unary)
+    truncation unary)
   rcgmp_lower_mlir(runtime/differential/${name}.mlir object)
   target_sources(rcgmp-differential PRIVATE ${object})
 endforeach()

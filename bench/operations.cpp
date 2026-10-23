@@ -40,6 +40,8 @@ void *remsi(void *, void *);
 void *floordivsi(void *, void *);
 void *floormodsi(void *, void *);
 rcgmp_mpz_qr divremsi(void *, void *);
+std::int64_t trunci(void *);
+std::int64_t trunci_overflow(void *);
 }
 
 namespace {
@@ -435,6 +437,49 @@ void registerDivisions() {
                                  });
 }
 
+// Truncations to i64 of borrowed integers, and GMP reading the low word with
+// and without a range check.
+void registerTruncations() {
+  static Integer smallX(smallLhs), heapX(lhsWords);
+  for (auto [label, x, gmp] :
+       {std::tuple{"/immediate", immediate(smallLhs), &smallX},
+        {"/heap", heap(lhsWords), &heapX}}) {
+    // Direct calls, as GMP's are.
+    benchmark::RegisterBenchmark(std::string("trunci") + label,
+                                 [=](benchmark::State &state) {
+                                   for (auto _ : state) {
+                                     benchmark::DoNotOptimize(x);
+                                     benchmark::DoNotOptimize(trunci(x));
+                                   }
+                                 });
+    benchmark::RegisterBenchmark(
+        std::string("trunci_overflow") + label, [=](benchmark::State &state) {
+          for (auto _ : state) {
+            benchmark::DoNotOptimize(x);
+            benchmark::DoNotOptimize(trunci_overflow(x));
+          }
+        });
+    benchmark::RegisterBenchmark(std::string("gmp get_si") + label,
+                                 [=](benchmark::State &state) {
+                                   mpz_srcptr y = gmp->value;
+                                   for (auto _ : state) {
+                                     benchmark::DoNotOptimize(y);
+                                     benchmark::DoNotOptimize(mpz_get_si(y));
+                                   }
+                                 });
+    benchmark::RegisterBenchmark(
+        std::string("gmp fits_slong_p, get_si") + label,
+        [=](benchmark::State &state) {
+          mpz_srcptr y = gmp->value;
+          for (auto _ : state) {
+            benchmark::DoNotOptimize(y);
+            benchmark::DoNotOptimize(mpz_fits_slong_p(y));
+            benchmark::DoNotOptimize(mpz_get_si(y));
+          }
+        });
+  }
+}
+
 void registerOthers() {
   static Integer smallX(smallLhs), smallY(smallRhs), heapX(lhsWords),
       heapY(rhsWords), five(5);
@@ -527,6 +572,6 @@ void registerOthers() {
 
 [[maybe_unused]] const int registered =
     (registerBinaries(), registerUnaries(), registerShifts(),
-     registerDivisions(), registerOthers(), 0);
+     registerDivisions(), registerTruncations(), registerOthers(), 0);
 
 } // namespace

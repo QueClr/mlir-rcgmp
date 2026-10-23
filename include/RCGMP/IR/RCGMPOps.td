@@ -5,6 +5,7 @@
 include "RCGMP/IR/RCGMPAttrs.td"
 include "RCGMP/IR/RCGMPEnums.td"
 include "RCGMP/IR/RCGMPOpBase.td"
+include "mlir/Dialect/Arith/IR/ArithBase.td"
 include "mlir/Interfaces/ControlFlowInterfaces.td"
 
 // A consumed reference may be decremented, reused, or freed.
@@ -300,6 +301,52 @@ def RCGMP_CmpIOp : RCGMPOp<"cmpi", [SameTypeOperands, RCGMP_NotSpeculatable]> {
       Arg<RCGMP_MpzType, "borrowed rhs", [MemRead]>:$rhs);
   let results = (outs I1:$result);
   let assemblyFormat = "$predicate `,` $lhs `,` $rhs attr-dict `:` type($lhs)";
+}
+
+def RCGMP_TruncIOp : RCGMPOp<"trunci", [RCGMP_NotSpeculatable]> {
+  let summary = "Truncate a borrowed integer to a fixed-width integer";
+  let description = [{
+    The result is the low bits of the integer's infinite two's-complement
+    representation, so the integer is reduced modulo two to the power of the
+    result width. The operand is borrowed, as by `rcgmp.cmpi`.
+
+    As for `arith.trunci`, the `nsw` flag makes the result poison when the
+    integer does not fit the result type as a signed integer, and `nuw` when
+    it does not fit as an unsigned one.
+
+    ```mlir
+    %v = rcgmp.trunci %x overflow<nsw> : !rcgmp.mpz to i32
+    ```
+  }];
+  let arguments = (ins Arg<RCGMP_MpzType, "borrowed integer", [MemRead]>:$value,
+      DefaultValuedAttr<Arith_IntegerOverflowAttr,
+                        "::mlir::arith::IntegerOverflowFlags::none">:$overflowFlags);
+  let results = (outs AnySignlessInteger:$result);
+  let assemblyFormat = [{
+    $value (`overflow` `` $overflowFlags^)? attr-dict `:` type($value) `to`
+    type($result)
+  }];
+}
+
+def RCGMP_TruncIOverflowOp : RCGMPOp<"trunci_overflow",
+    [RCGMP_NotSpeculatable]> {
+  let summary = "Truncate a borrowed integer and report whether it fits";
+  let description = [{
+    The value is the result of `rcgmp.trunci`. The overflow bit is set when the
+    integer does not fit the result type as a signed integer, or with
+    `unsigned` as an unsigned integer. The operand is borrowed.
+
+    ```mlir
+    %v, %overflow = rcgmp.trunci_overflow %x unsigned : !rcgmp.mpz to i32
+    ```
+  }];
+  let arguments = (ins Arg<RCGMP_MpzType, "borrowed integer", [MemRead]>:$value,
+      UnitAttr:$isUnsigned);
+  let results = (outs AnySignlessInteger:$result, I1:$overflow);
+  let assemblyFormat = [{
+    $value (`unsigned` $isUnsigned^)? attr-dict `:` type($value) `to`
+    type($result)
+  }];
 }
 
 def RCGMP_MatchOp : RCGMPOp<"match", [RCGMP_NotSpeculatable,
