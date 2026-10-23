@@ -35,6 +35,11 @@ RCGMP_ENTRY(void *, retain, void *)
 RCGMP_ENTRY(void, release, void *)
 #undef RCGMP_ENTRY
 std::int64_t successor(void *);
+void *divsi(void *, void *);
+void *remsi(void *, void *);
+void *floordivsi(void *, void *);
+void *floormodsi(void *, void *);
+rcgmp_mpz_qr divremsi(void *, void *);
 }
 
 namespace {
@@ -351,6 +356,85 @@ void registerShifts() {
       });
 }
 
+struct DivisionCase {
+  const char *name;
+  Binary compiled;
+  GmpBinary gmp;
+};
+
+const std::array<DivisionCase, 4> divisions{{
+    {"divsi", divsi, mpz_tdiv_q},
+    {"remsi", remsi, mpz_tdiv_r},
+    {"floordivsi", floordivsi, mpz_fdiv_q},
+    {"floormodsi", floormodsi, mpz_fdiv_r},
+}};
+
+// Divisions by a negative divisor, so that floor division adjusts inexact
+// results, with nonatomic counting only, as atomic counting costs what it
+// does for the other operations.
+void registerDivisions() {
+  static Integer smallX(smallLhs), smallY(-smallRhs), heapX(lhsWords),
+      heapY(rhsWords);
+  mpz_neg(heapY.value, heapY.value);
+  Counted counted = countings[0];
+  // Each run makes its operands, which binaryShared releases at its end.
+  using Operands = std::pair<void *, void *> (*)();
+  const std::array<std::pair<const char *, Operands>, 3> cases{{
+      {"/immediates",
+       [] { return std::pair{immediate(smallLhs), immediate(-smallRhs)}; }},
+      {"/shared heap, immediate",
+       [] { return std::pair{heap(lhsWords), immediate(-smallRhs)}; }},
+      {"/shared heaps",
+       [] {
+         return std::pair{heap(lhsWords), rcgmp_mpz_neg(heap(rhsWords), 0)};
+       }},
+  }};
+  for (const DivisionCase &op : divisions) {
+    counted.binary = op.compiled;
+    for (auto [label, operands] : cases)
+      benchmark::RegisterBenchmark(std::string(op.name) + label,
+                                   [=](benchmark::State &state) {
+                                     auto [x, y] = operands();
+                                     binaryShared(state, counted, x, y);
+                                   });
+    for (auto [label, x, y] : {std::tuple{"/immediates", &smallX, &smallY},
+                               {"/shared heap, immediate", &heapX, &smallY},
+                               {"/shared heaps", &heapX, &heapY}})
+      benchmark::RegisterBenchmark(std::string("gmp ") + op.name + label,
+                                   gmpBinary, op.gmp, x->value, y->value);
+  }
+  for (auto [label, operands] : cases)
+    benchmark::RegisterBenchmark(std::string("divremsi") + label,
+                                 [=](benchmark::State &state) {
+                                   auto [x, y] = operands();
+                                   for (auto _ : state) {
+                                     retain(x);
+                                     retain(y);
+                                     auto [q, r] = divremsi(x, y);
+                                     release(q);
+                                     release(r);
+                                   }
+                                   release(x);
+                                   release(y);
+                                 });
+  for (auto [label, x, y] : {std::tuple{"/immediates", &smallX, &smallY},
+                             {"/shared heap, immediate", &heapX, &smallY},
+                             {"/shared heaps", &heapX, &heapY}})
+    benchmark::RegisterBenchmark(std::string("gmp tdiv_qr") + label,
+                                 [=](benchmark::State &state) {
+                                   for (auto _ : state) {
+                                     mpz_t q, r;
+                                     mpz_init(q);
+                                     mpz_init(r);
+                                     mpz_tdiv_qr(q, r, x->value, y->value);
+                                     benchmark::DoNotOptimize(q);
+                                     benchmark::DoNotOptimize(r);
+                                     mpz_clear(q);
+                                     mpz_clear(r);
+                                   }
+                                 });
+}
+
 void registerOthers() {
   static Integer smallX(smallLhs), smallY(smallRhs), heapX(lhsWords),
       heapY(rhsWords), five(5);
@@ -441,7 +525,8 @@ void registerOthers() {
         });
 }
 
-[[maybe_unused]] const int registered = (registerBinaries(), registerUnaries(),
-                                         registerShifts(), registerOthers(), 0);
+[[maybe_unused]] const int registered =
+    (registerBinaries(), registerUnaries(), registerShifts(),
+     registerDivisions(), registerOthers(), 0);
 
 } // namespace

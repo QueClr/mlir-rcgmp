@@ -64,7 +64,7 @@ struct NegateLowering : TestLowering<NegateLowering> {
         arith::XOrIOp::create(rewriter, loc, checked.getOverflow(), yes);
     auto valid = arith::AndIOp::create(rewriter, loc, fits,
                                        allImmediate(rewriter, loc, x));
-    return {checked.getDiff(), valid};
+    return {{checked.getDiff()}, valid};
   }
 };
 
@@ -91,7 +91,7 @@ struct SelectLowering : TestLowering<SelectLowering> {
                                 Operation *, ValueRange operands) {
     Value x = operands[0], condition = operands[1], y = operands[2];
     auto bits = arith::SelectOp::create(rewriter, loc, condition, x, y);
-    return {bits, allImmediate(rewriter, loc, {x, y})};
+    return {{bits}, allImmediate(rewriter, loc, {x, y})};
   }
 };
 
@@ -138,7 +138,7 @@ struct EqualWordLowering : TestLowering<EqualWordLowering> {
     auto payload = arith::ShRSIOp::create(rewriter, loc, x, two);
     auto equal = arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::eq,
                                        payload, word);
-    return {equal, allImmediate(rewriter, loc, x)};
+    return {{equal}, allImmediate(rewriter, loc, x)};
   }
 };
 
@@ -169,7 +169,7 @@ struct TruncateLowering : TestLowering<TruncateLowering> {
       payload = arith::TruncIOp::create(rewriter, loc, type, payload);
     else if (type.getWidth() > widthOf(x))
       payload = arith::ExtSIOp::create(rewriter, loc, type, payload);
-    return {payload, allImmediate(rewriter, loc, x)};
+    return {{payload}, allImmediate(rewriter, loc, x)};
   }
 };
 

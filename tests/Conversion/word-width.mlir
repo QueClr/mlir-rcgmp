@@ -132,6 +132,16 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<!llvm.ptr, dense<
     %r = rcgmp.shrsi %x, %n : !rcgmp.mpz, i8
     return %r : !rcgmp.mpz
   }
+  // The quotient's range check follows the handle width.
+  // CHECK-LABEL: llvm.func @div
+  // CHECK: llvm.sdiv {{.*}} : i32
+  // CHECK: llvm.mlir.constant(536870911 : i32)
+  // CHECK: llvm.icmp "sle"
+  // CHECK: llvm.call @rcgmp_mpz_tdiv_q({{.*}}) : (!llvm.ptr, !llvm.ptr, i32)
+  func.func @div(%x: !rcgmp.mpz, %y: !rcgmp.mpz) -> !rcgmp.mpz {
+    %r = rcgmp.divsi %x, %y : !rcgmp.mpz
+    return %r : !rcgmp.mpz
+  }
   // Limbs and tagged offsets follow the handle width: 2^32 + 1 has two 32-bit
   // limbs, and the remainder of at_least 2 subtracts 8 from the tagged bits.
   // CHECK-LABEL: llvm.func @match

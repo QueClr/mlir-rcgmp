@@ -145,7 +145,7 @@ struct AddILowering : FastPathLowering<AddILowering> {
     auto valid = arith::AndIOp::create(rewriter, loc, fits, both);
     auto three = arith::ConstantIntOp::create(rewriter, loc, 3, width);
     auto tagged = arith::XOrIOp::create(rewriter, loc, sum, three);
-    return {tagged, valid};
+    return {{tagged}, valid};
   }
 };
 
@@ -171,7 +171,7 @@ struct SubILowering : FastPathLowering<SubILowering> {
         rewriter, loc, 1, cast<IntegerType>(lhs.getType()).getWidth());
     // Subtracting tagged immediates yields 4*(x-y); restore the low tag bit.
     auto tagged = arith::OrIOp::create(rewriter, loc, checked.getDiff(), one);
-    return {tagged, valid};
+    return {{tagged}, valid};
   }
 };
 
@@ -203,7 +203,7 @@ struct MulILowering : FastPathLowering<MulILowering> {
     auto one = arith::ConstantIntOp::create(rewriter, loc, 1, width);
     auto tagged =
         arith::OrIOp::create(rewriter, loc, product.getProduct(), one);
-    return {tagged, valid};
+    return {{tagged}, valid};
   }
 };
 
@@ -219,7 +219,7 @@ struct AndILowering : FastPathLowering<AndILowering> {
                                 Operation *, ValueRange operands) {
     Value lhs = operands[0], rhs = operands[1];
     auto bits = arith::AndIOp::create(rewriter, loc, lhs, rhs);
-    return {bits, allImmediate(rewriter, loc, {lhs, rhs})};
+    return {{bits}, allImmediate(rewriter, loc, {lhs, rhs})};
   }
 };
 
@@ -238,7 +238,7 @@ struct XOrILowering : FastPathLowering<XOrILowering> {
     auto one = arith::ConstantIntOp::create(
         rewriter, loc, 1, cast<IntegerType>(lhs.getType()).getWidth());
     auto tagged = arith::OrIOp::create(rewriter, loc, bits, one);
-    return {tagged, allImmediate(rewriter, loc, {lhs, rhs})};
+    return {{tagged}, allImmediate(rewriter, loc, {lhs, rhs})};
   }
 };
 
@@ -254,7 +254,7 @@ struct OrILowering : FastPathLowering<OrILowering> {
                                 Operation *, ValueRange operands) {
     Value lhs = operands[0], rhs = operands[1];
     auto bits = arith::OrIOp::create(rewriter, loc, lhs, rhs);
-    return {bits, allImmediate(rewriter, loc, {lhs, rhs})};
+    return {{bits}, allImmediate(rewriter, loc, {lhs, rhs})};
   }
 };
 
@@ -274,7 +274,7 @@ struct NotILowering : FastPathLowering<NotILowering> {
     auto payload = arith::ConstantIntOp::create(
         rewriter, loc, -4, cast<IntegerType>(bits.getType()).getWidth());
     auto tagged = arith::XOrIOp::create(rewriter, loc, bits, payload);
-    return {tagged, allImmediate(rewriter, loc, bits)};
+    return {{tagged}, allImmediate(rewriter, loc, bits)};
   }
 };
 
@@ -311,7 +311,7 @@ struct NegILowering : FastPathLowering<NegILowering> {
     auto [negated, inRange] = buildNegation(rewriter, loc, bits);
     auto valid = arith::AndIOp::create(rewriter, loc, inRange,
                                        allImmediate(rewriter, loc, bits));
-    return {negated, valid};
+    return {{negated}, valid};
   }
 };
 
@@ -336,7 +336,7 @@ struct AbsILowering : FastPathLowering<AbsILowering> {
         arith::SelectOp::create(rewriter, loc, negative, negated, bits);
     auto valid = arith::AndIOp::create(rewriter, loc, inRange,
                                        allImmediate(rewriter, loc, bits));
-    return {magnitude, valid};
+    return {{magnitude}, valid};
   }
 };
 
@@ -397,7 +397,7 @@ struct ShLILowering : FastPathLowering<ShLILowering> {
     auto valid = arith::AndIOp::create(rewriter, loc, kept,
                                        allImmediate(rewriter, loc, bits));
     auto tagged = arith::OrIOp::create(rewriter, loc, shifted, one);
-    return {tagged, valid};
+    return {{tagged}, valid};
   }
 };
 
@@ -428,7 +428,136 @@ struct ShRSILowering : FastPathLowering<ShRSILowering> {
     auto scaled = arith::AndIOp::create(rewriter, loc, shifted, mask);
     auto one = arith::ConstantIntOp::create(rewriter, loc, 1, width);
     auto tagged = arith::OrIOp::create(rewriter, loc, scaled, one);
-    return {tagged, allImmediate(rewriter, loc, bits)};
+    return {{tagged}, allImmediate(rewriter, loc, bits)};
+  }
+};
+
+// Divides immediates, producing the quotient, the remainder, or both, rounded
+// toward zero or toward negative infinity.
+template <typename Derived, bool floor, bool quotient, bool remainder>
+struct DivisionLowering : FastPathLowering<Derived> {
+  using FastPathLowering<Derived>::FastPathLowering;
+
+  static FastPath buildFastPath(PatternRewriter &rewriter, Location loc,
+                                Operation *op, ValueRange operands) {
+    Value lhs = operands[0], rhs = operands[1];
+    auto type = cast<IntegerType>(lhs.getType());
+    auto constant = [&](int64_t value) -> Value {
+      return arith::ConstantIntOp::create(rewriter, loc, value,
+                                          type.getWidth());
+    };
+    Value two = constant(2), zero = constant(0);
+    // Untagging any bits leaves a value above the signed word minimum, so
+    // dividing it by -1 never overflows the word.
+    Value x = arith::ShRSIOp::create(rewriter, loc, lhs, two);
+    Value y = arith::ShRSIOp::create(rewriter, loc, rhs, two);
+    Value valid =
+        FastPathLowering<Derived>::allImmediate(rewriter, loc, {lhs, rhs});
+    // Dividing by zero is undefined even where the fast path is not taken, so
+    // a zero divisor is replaced unless the operation assumes it nonzero.
+    if (!cast<typename Derived::Op>(op).getAssumeNonzero()) {
+      Value nonzero = arith::CmpIOp::create(rewriter, loc,
+                                            arith::CmpIPredicate::ne, y, zero);
+      y = arith::SelectOp::create(rewriter, loc, nonzero, y, constant(1));
+      valid = arith::AndIOp::create(rewriter, loc, valid, nonzero);
+    }
+    Value q = arith::DivSIOp::create(rewriter, loc, x, y);
+    Value r = arith::RemSIOp::create(rewriter, loc, x, y);
+    if (floor) {
+      // A nonzero remainder whose sign differs from the divisor's moves the
+      // quotient down by one and the remainder by one divisor.
+      auto inexact = arith::CmpIOp::create(rewriter, loc,
+                                           arith::CmpIPredicate::ne, r, zero);
+      auto signs = arith::XOrIOp::create(rewriter, loc, r, y);
+      auto differ = arith::CmpIOp::create(
+          rewriter, loc, arith::CmpIPredicate::slt, signs, zero);
+      auto adjust = arith::AndIOp::create(rewriter, loc, inexact, differ);
+      q = arith::SubIOp::create(
+          rewriter, loc, q,
+          arith::ExtUIOp::create(rewriter, loc, type, adjust));
+      r = arith::AddIOp::create(
+          rewriter, loc, r,
+          arith::SelectOp::create(rewriter, loc, adjust, y, zero));
+    }
+    auto tag = [&](Value value) -> Value {
+      auto scaled = arith::ShLIOp::create(rewriter, loc, value, two);
+      return arith::OrIOp::create(rewriter, loc, scaled, constant(1));
+    };
+    FastPath fast;
+    if (quotient) {
+      // Only the quotient of the immediate minimum by -1 leaves the immediate
+      // range; remainders are smaller than the divisor.
+      auto maximum = arith::ConstantOp::create(
+          rewriter, loc,
+          rewriter.getIntegerAttr(
+              type, APInt::getSignedMaxValue(type.getWidth()).ashr(2)));
+      auto fits = arith::CmpIOp::create(rewriter, loc,
+                                        arith::CmpIPredicate::sle, q, maximum);
+      valid = arith::AndIOp::create(rewriter, loc, valid, fits);
+      fast.values.push_back(tag(q));
+    }
+    if (remainder)
+      fast.values.push_back(tag(r));
+    fast.valid = valid;
+    return fast;
+  }
+};
+
+struct DivSILowering : DivisionLowering<DivSILowering, false, true, false> {
+  using DivisionLowering::DivisionLowering;
+  using Op = DivSIOp;
+
+  static StringRef getRuntimeName(bool atomic) {
+    return atomic ? "rcgmp_mpz_tdiv_q_atomic" : "rcgmp_mpz_tdiv_q";
+  }
+};
+
+struct RemSILowering : DivisionLowering<RemSILowering, false, false, true> {
+  using DivisionLowering::DivisionLowering;
+  using Op = RemSIOp;
+
+  static StringRef getRuntimeName(bool atomic) {
+    return atomic ? "rcgmp_mpz_tdiv_r_atomic" : "rcgmp_mpz_tdiv_r";
+  }
+};
+
+struct FloorDivSILowering
+    : DivisionLowering<FloorDivSILowering, true, true, false> {
+  using DivisionLowering::DivisionLowering;
+  using Op = FloorDivSIOp;
+
+  static StringRef getRuntimeName(bool atomic) {
+    return atomic ? "rcgmp_mpz_fdiv_q_atomic" : "rcgmp_mpz_fdiv_q";
+  }
+};
+
+struct FloorModSILowering
+    : DivisionLowering<FloorModSILowering, true, false, true> {
+  using DivisionLowering::DivisionLowering;
+  using Op = FloorModSIOp;
+
+  static StringRef getRuntimeName(bool atomic) {
+    return atomic ? "rcgmp_mpz_fdiv_r_atomic" : "rcgmp_mpz_fdiv_r";
+  }
+};
+
+struct DivRemSILowering
+    : DivisionLowering<DivRemSILowering, false, true, true> {
+  using DivisionLowering::DivisionLowering;
+  using Op = DivRemSIOp;
+
+  static StringRef getRuntimeName(bool atomic) {
+    return atomic ? "rcgmp_mpz_tdiv_qr_atomic" : "rcgmp_mpz_tdiv_qr";
+  }
+};
+
+struct FloorDivModSILowering
+    : DivisionLowering<FloorDivModSILowering, true, true, true> {
+  using DivisionLowering::DivisionLowering;
+  using Op = FloorDivModSIOp;
+
+  static StringRef getRuntimeName(bool atomic) {
+    return atomic ? "rcgmp_mpz_fdiv_qr_atomic" : "rcgmp_mpz_fdiv_qr";
   }
 };
 
@@ -551,7 +680,7 @@ struct CmpILowering : FastPathLowering<CmpILowering> {
     // range, so tagged immediates compare as their values do.
     auto result =
         arith::CmpIOp::create(rewriter, loc, getPredicate(op), lhs, rhs);
-    return {result, allImmediate(rewriter, loc, {lhs, rhs})};
+    return {{result}, allImmediate(rewriter, loc, {lhs, rhs})};
   }
 
 private:
@@ -592,13 +721,17 @@ struct ConvertRCGMPToSCFPass
         .add<ConstantLowering, FromIntLowering, RetainLowering, ReleaseLowering,
              AddILowering, SubILowering, MulILowering, AndILowering,
              XOrILowering, OrILowering, NotILowering, NegILowering,
-             AbsILowering, ShLILowering, ShRSILowering, CmpILowering>(
+             AbsILowering, ShLILowering, ShRSILowering, DivSILowering,
+             RemSILowering, FloorDivSILowering, FloorModSILowering,
+             DivRemSILowering, FloorDivModSILowering, CmpILowering>(
             &getContext());
     populateMatchLoweringPatterns(patterns);
     ConversionTarget target(getContext());
     target.addIllegalOp<ConstantOp, FromIntOp, RetainOp, ReleaseOp, AddIOp,
                         SubIOp, MulIOp, AndIOp, XOrIOp, OrIOp, NotIOp, NegIOp,
-                        AbsIOp, ShLIOp, ShRSIOp, CmpIOp, MatchOp, YieldOp>();
+                        AbsIOp, ShLIOp, ShRSIOp, DivSIOp, RemSIOp, FloorDivSIOp,
+                        FloorModSIOp, DivRemSIOp, FloorDivModSIOp, CmpIOp,
+                        MatchOp, YieldOp>();
     target.markUnknownOpDynamicallyLegal([](Operation *) { return true; });
     if (failed(applyPartialConversion(getOperation(), target,
                                       std::move(patterns))))

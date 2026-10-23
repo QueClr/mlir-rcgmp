@@ -46,6 +46,18 @@ void *shli_local(void *, std::uint64_t);
 void *shli_atomic(void *, std::uint64_t);
 void *shrsi_local(void *, std::uint64_t);
 void *shrsi_atomic(void *, std::uint64_t);
+void *divsi_local(void *, void *);
+void *divsi_atomic(void *, void *);
+void *remsi_local(void *, void *);
+void *remsi_atomic(void *, void *);
+void *floordivsi_local(void *, void *);
+void *floordivsi_atomic(void *, void *);
+void *floormodsi_local(void *, void *);
+void *floormodsi_atomic(void *, void *);
+rcgmp_mpz_qr divremsi_local(void *, void *);
+rcgmp_mpz_qr divremsi_atomic(void *, void *);
+rcgmp_mpz_qr floordivmodsi_local(void *, void *);
+rcgmp_mpz_qr floordivmodsi_atomic(void *, void *);
 void *retain_local(void *);
 void *retain_atomic(void *);
 void release_local(void *);
@@ -243,6 +255,97 @@ template <typename Sink> void AbslStringify(Sink &sink, ShiftOperator op) {
 fuzztest::Domain<ShiftOperator> AnyShiftOperator() {
   return fuzztest::ElementOf(
       std::vector(shiftOperators.begin(), shiftOperators.end()));
+}
+
+enum class DivisionOperator {
+  divsi,
+  remsi,
+  floordivsi,
+  floormodsi,
+  divremsi,
+  floordivmodsi
+};
+
+// The compiled and runtime entry points of a division, indexed by counting,
+// and the GMP function computing its quotient and remainder. A division with
+// one result has single entry points, and one with both has pair entry points.
+struct DivisionOperation {
+  std::string_view name;
+  bool quotient, remainder;
+  std::array<void *(*)(void *, void *), 2> compiled;
+  std::array<void *(*)(void *, void *, std::uint32_t), 2> runtime;
+  std::array<rcgmp_mpz_qr (*)(void *, void *), 2> compiledPair;
+  std::array<rcgmp_mpz_qr (*)(void *, void *, std::uint32_t), 2> runtimePair;
+  void (*oracle)(mpz_ptr, mpz_ptr, mpz_srcptr, mpz_srcptr);
+};
+
+constexpr std::array<DivisionOperation, 6> divisionOperations{{
+    {"divsi",
+     true,
+     false,
+     {divsi_local, divsi_atomic},
+     {rcgmp_mpz_tdiv_q, rcgmp_mpz_tdiv_q_atomic},
+     {},
+     {},
+     mpz_tdiv_qr},
+    {"remsi",
+     false,
+     true,
+     {remsi_local, remsi_atomic},
+     {rcgmp_mpz_tdiv_r, rcgmp_mpz_tdiv_r_atomic},
+     {},
+     {},
+     mpz_tdiv_qr},
+    {"floordivsi",
+     true,
+     false,
+     {floordivsi_local, floordivsi_atomic},
+     {rcgmp_mpz_fdiv_q, rcgmp_mpz_fdiv_q_atomic},
+     {},
+     {},
+     mpz_fdiv_qr},
+    {"floormodsi",
+     false,
+     true,
+     {floormodsi_local, floormodsi_atomic},
+     {rcgmp_mpz_fdiv_r, rcgmp_mpz_fdiv_r_atomic},
+     {},
+     {},
+     mpz_fdiv_qr},
+    {"divremsi",
+     true,
+     true,
+     {},
+     {},
+     {divremsi_local, divremsi_atomic},
+     {rcgmp_mpz_tdiv_qr, rcgmp_mpz_tdiv_qr_atomic},
+     mpz_tdiv_qr},
+    {"floordivmodsi",
+     true,
+     true,
+     {},
+     {},
+     {floordivmodsi_local, floordivmodsi_atomic},
+     {rcgmp_mpz_fdiv_qr, rcgmp_mpz_fdiv_qr_atomic},
+     mpz_fdiv_qr},
+}};
+
+constexpr std::array divisionOperators{
+    DivisionOperator::divsi,      DivisionOperator::remsi,
+    DivisionOperator::floordivsi, DivisionOperator::floormodsi,
+    DivisionOperator::divremsi,   DivisionOperator::floordivmodsi};
+
+const DivisionOperation &operation(DivisionOperator op) {
+  return divisionOperations[std::to_underlying(op)];
+}
+
+template <typename Sink> void AbslStringify(Sink &sink, DivisionOperator op) {
+  sink.Append(operation(op).name);
+}
+
+fuzztest::Domain<DivisionOperator> AnyDivisionOperator() {
+  return fuzztest::ElementOf(
+      std::vector(divisionOperators.begin(), divisionOperators.end()));
 }
 
 // A shift by a number of bits.

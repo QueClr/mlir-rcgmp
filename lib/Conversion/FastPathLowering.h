@@ -10,16 +10,16 @@
 
 namespace mlir::rcgmp {
 
-// For an mpz result, value holds the tagged result bits, which must form an
-// immediate whenever valid is true; otherwise it is the result itself. The
-// value is used only when valid is true.
+// One value per result. For an mpz result, the value holds the tagged result
+// bits, which must form an immediate whenever valid is true; otherwise it is
+// the result itself. The values are used only when valid is true.
 struct FastPath {
-  Value value;
+  SmallVector<Value, 1> values;
   Value valid;
 };
 
-// Lowers a single-result operation with at least one mpz operand into an
-// inline fast path and a runtime call taken when the fast path is not valid.
+// Lowers an operation with at least one mpz operand into an inline fast path
+// and a runtime call taken when the fast path is not valid.
 //
 // Derived supplies:
 // - Op, the operation class, or getOperationName() for an operation without
@@ -39,12 +39,15 @@ struct FastPath {
 // buildRuntimeOperand converts them. When the operation consumes its mpz
 // operands and produces an mpz, an unsigned i32 reuse mask follows, whose bit
 // i permits reusing the storage of the i-th mpz operand, so such an operation
-// has at most 32 mpz operands. Derived may shadow:
+// has at most 32 mpz operands. An operation with several results receives
+// them from the runtime as they are. For one with a single result, Derived
+// may shadow:
 // - consumesOperands, false when every mpz operand is borrowed;
 // - getRuntimeResultType(op) and buildSlowResult(rewriter, loc, op, result),
 //   when the runtime result must be converted to the operation result;
 // - buildSlowPath(rewriter, loc, op, callRuntime), when the result can often
-//   be found without calling the runtime;
+//   be found without calling the runtime.
+// For any operation, Derived may shadow:
 // - buildRuntimeOperand(rewriter, loc, operand, word), to convert a non-mpz
 //   operand before the fast path and the runtime receive it, such as to the
 //   handle-width word type, so that the runtime signature does not depend on
@@ -84,13 +87,13 @@ template <typename Derived> struct FastPathLowering : RewritePattern {
   LogicalResult matchAndRewrite(Operation *op,
                                 PatternRewriter &rewriter) const override {
     auto handle = llvm::find_if(op->getOperandTypes(), llvm::IsaPred<MpzType>);
-    if (op->getNumResults() != 1 || handle == op->getOperandTypes().end())
-      return rewriter.notifyMatchFailure(
-          op, "expected one result and an mpz operand");
+    if (!op->getNumResults() || handle == op->getOperandTypes().end())
+      return rewriter.notifyMatchFailure(op,
+                                         "expected results and an mpz operand");
     auto type = cast<MpzType>(*handle);
     auto loc = op->getLoc();
-    Type resultType = op->getResult(0).getType();
-    bool mpzResult = isa<MpzType>(resultType);
+    bool single = op->getNumResults() == 1;
+    bool mpzResult = isa<MpzType>(op->getResult(0).getType());
     bool passReuse = Derived::consumesOperands && mpzResult;
     if (passReuse && llvm::count_if(op->getOperandTypes(),
                                     llvm::IsaPred<MpzType>) > maxReuseFlags)
@@ -108,8 +111,10 @@ template <typename Derived> struct FastPathLowering : RewritePattern {
     SmallVector<Type> argumentTypes(ValueRange(arguments).getTypes());
     if (passReuse)
       argumentTypes.push_back(rewriter.getI32Type());
-    auto signature = rewriter.getFunctionType(
-        argumentTypes, Derived::getRuntimeResultType(op));
+    SmallVector<Type> resultTypes(op->getResultTypes());
+    if (single)
+      resultTypes.front() = Derived::getRuntimeResultType(op);
+    auto signature = rewriter.getFunctionType(argumentTypes, resultTypes);
     StringRef name = Derived::getRuntimeName(type.getAtomic());
     auto module = op->getParentOfType<ModuleOp>();
     auto function = module.lookupSymbol<func::FuncOp>(name);
@@ -136,23 +141,31 @@ template <typename Derived> struct FastPathLowering : RewritePattern {
     }
     FastPath fast = Derived::buildFastPath(rewriter, loc, op, operands);
     auto branch =
-        scf::IfOp::create(rewriter, loc, TypeRange{resultType}, fast.valid,
+        scf::IfOp::create(rewriter, loc, op->getResultTypes(), fast.valid,
                           /*withElseRegion=*/true);
     rewriter.setInsertionPointToStart(&branch.getThenRegion().front());
-    Value immediate = fast.value;
-    if (mpzResult)
-      immediate =
-          bridge::MpzFromBitsOp::create(rewriter, loc, resultType, fast.value);
-    scf::YieldOp::create(rewriter, loc, immediate);
+    SmallVector<Value> immediates;
+    for (auto [value, resultType] :
+         llvm::zip_equal(fast.values, op->getResultTypes()))
+      immediates.push_back(
+          isa<MpzType>(resultType)
+              ? bridge::MpzFromBitsOp::create(rewriter, loc, resultType, value)
+              : value);
+    scf::YieldOp::create(rewriter, loc, immediates);
 
     rewriter.setInsertionPointToStart(&branch.getElseRegion().front());
     if (passReuse)
       arguments.push_back(reuseMask(rewriter, loc, handles));
-    Value slow = Derived::buildSlowPath(rewriter, loc, op, [&] {
-      return func::CallOp::create(rewriter, loc, function, arguments)
-          .getResult(0);
-    });
-    scf::YieldOp::create(rewriter, loc, slow);
+    auto call = [&] {
+      return func::CallOp::create(rewriter, loc, function, arguments);
+    };
+    if (single)
+      scf::YieldOp::create(rewriter, loc,
+                           Derived::buildSlowPath(rewriter, loc, op, [&] {
+                             return call().getResult(0);
+                           }));
+    else
+      scf::YieldOp::create(rewriter, loc, call().getResults());
     rewriter.replaceOp(op, branch.getResults());
     return success();
   }

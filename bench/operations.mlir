@@ -139,3 +139,23 @@ func.func @shrsi_atomic(%x: !rcgmp.mpz<atomic>, %n: i64) -> !rcgmp.mpz<atomic> {
   %r = rcgmp.shrsi %x, %n : !rcgmp.mpz<atomic>, i64
   return %r : !rcgmp.mpz<atomic>
 }
+func.func @divsi(%x: !rcgmp.mpz, %y: !rcgmp.mpz) -> !rcgmp.mpz {
+  %r = rcgmp.divsi %x, %y : !rcgmp.mpz
+  return %r : !rcgmp.mpz
+}
+func.func @remsi(%x: !rcgmp.mpz, %y: !rcgmp.mpz) -> !rcgmp.mpz {
+  %r = rcgmp.remsi %x, %y : !rcgmp.mpz
+  return %r : !rcgmp.mpz
+}
+func.func @floordivsi(%x: !rcgmp.mpz, %y: !rcgmp.mpz) -> !rcgmp.mpz {
+  %r = rcgmp.floordivsi %x, %y : !rcgmp.mpz
+  return %r : !rcgmp.mpz
+}
+func.func @floormodsi(%x: !rcgmp.mpz, %y: !rcgmp.mpz) -> !rcgmp.mpz {
+  %r = rcgmp.floormodsi %x, %y : !rcgmp.mpz
+  return %r : !rcgmp.mpz
+}
+func.func @divremsi(%x: !rcgmp.mpz, %y: !rcgmp.mpz) -> (!rcgmp.mpz, !rcgmp.mpz) {
+  %q, %r = rcgmp.divremsi %x, %y : !rcgmp.mpz
+  return %q, %r : !rcgmp.mpz, !rcgmp.mpz
+}

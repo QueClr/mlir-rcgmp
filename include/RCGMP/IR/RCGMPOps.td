@@ -192,6 +192,81 @@ def RCGMP_ShRSIOp : RCGMP_ShiftOp<"shrsi", [{
   let summary = "Consume an integer reference and shift it right arithmetically";
 }
 
+defvar RCGMP_DivisionArguments = (ins
+    Arg<RCGMP_MpzType, "consumed dividend", RCGMP_ConsumedEffects>:$lhs,
+    Arg<RCGMP_MpzType, "consumed divisor", RCGMP_ConsumedEffects>:$rhs,
+    UnitAttr:$assumeNonzero);
+
+defvar RCGMP_DivisionDescription = [{
+    Each operand position consumes one owned reference; aliased heap operands
+    require two references. Each result owns one reference. A uniquely owned
+    operand may supply result storage; shared operands retain their values.
+    Division is exact, with no fixed-width overflow.
+
+    A zero divisor terminates the program. With `assume_nonzero`, a zero
+    divisor is undefined behavior instead.
+  }];
+
+class RCGMP_DivisionOp<string name, string semantics>
+    : RCGMPOp<name, [SameOperandsAndResultType, RCGMP_NotSpeculatable]> {
+  let arguments = RCGMP_DivisionArguments;
+  let results = (outs Res<RCGMP_MpzType, "new integer", [MemAlloc]>:$result);
+  let assemblyFormat = [{
+    $lhs `,` $rhs (`assume_nonzero` $assumeNonzero^)? attr-dict `:` type($result)
+  }];
+  let description = RCGMP_DivisionDescription # semantics;
+}
+
+def RCGMP_DivSIOp : RCGMP_DivisionOp<"divsi", [{
+    The quotient is rounded toward zero.
+  }]> {
+  let summary = "Consume two integer references and produce their truncated quotient";
+}
+
+def RCGMP_RemSIOp : RCGMP_DivisionOp<"remsi", [{
+    The remainder of the quotient rounded toward zero has the sign of lhs.
+  }]> {
+  let summary = "Consume two integer references and produce their truncated remainder";
+}
+
+def RCGMP_FloorDivSIOp : RCGMP_DivisionOp<"floordivsi", [{
+    The quotient is rounded toward negative infinity.
+  }]> {
+  let summary = "Consume two integer references and produce their floored quotient";
+}
+
+def RCGMP_FloorModSIOp : RCGMP_DivisionOp<"floormodsi", [{
+    The remainder of the quotient rounded toward negative infinity has the sign
+    of rhs.
+  }]> {
+  let summary = "Consume two integer references and produce their floored remainder";
+}
+
+class RCGMP_DivisionPairOp<string name, string semantics>
+    : RCGMPOp<name, [SameOperandsAndResultType, RCGMP_NotSpeculatable]> {
+  let arguments = RCGMP_DivisionArguments;
+  let results = (outs Res<RCGMP_MpzType, "new quotient", [MemAlloc]>:$quotient,
+                      Res<RCGMP_MpzType, "new remainder", [MemAlloc]>:$remainder);
+  let assemblyFormat = [{
+    $lhs `,` $rhs (`assume_nonzero` $assumeNonzero^)? attr-dict `:` type($quotient)
+  }];
+  let description = RCGMP_DivisionDescription # semantics;
+}
+
+def RCGMP_DivRemSIOp : RCGMP_DivisionPairOp<"divremsi", [{
+    The quotient is rounded toward zero, and the remainder has the sign of lhs,
+    as `rcgmp.divsi` and `rcgmp.remsi` compute them.
+  }]> {
+  let summary = "Consume two integer references and produce their truncated quotient and remainder";
+}
+
+def RCGMP_FloorDivModSIOp : RCGMP_DivisionPairOp<"floordivmodsi", [{
+    The quotient is rounded toward negative infinity, and the remainder has the
+    sign of rhs, as `rcgmp.floordivsi` and `rcgmp.floormodsi` compute them.
+  }]> {
+  let summary = "Consume two integer references and produce their floored quotient and remainder";
+}
+
 def RCGMP_CmpIOp : RCGMPOp<"cmpi", [SameTypeOperands, RCGMP_NotSpeculatable]> {
   let summary = "Compare two borrowed integers";
   let description = [{
