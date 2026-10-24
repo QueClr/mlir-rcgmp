@@ -4,6 +4,13 @@ project(RCGMP LANGUAGES C CXX VERSION 0.1.0)
 option(RCGMP_ENABLE_TESTS "Build rcgmp tests" ON)
 option(RCGMP_ENABLE_BENCHMARKS "Build rcgmp benchmarks" OFF)
 
+# ANTLR, which FuzzTest builds, otherwise warns and forces this default into
+# the cache, which applies from the next configure on.
+get_property(RCGMP_MULTI_CONFIG GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+if(NOT CMAKE_BUILD_TYPE AND NOT RCGMP_MULTI_CONFIG)
+  set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+endif()
+
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_STANDARD 20)
