@@ -1,3 +1,4 @@
+#include "RCGMP/Analysis/VerifyOwnership.h"
 #include "RCGMP/Conversion/ConvertRCGMPToLLVM.h"
 #include "RCGMP/Conversion/ConvertRCGMPToSCF.h"
 #include "RCGMP/IR/RCGMPDialect.h"
@@ -45,6 +46,7 @@ int main(int argc, char **argv) {
   mlir::registerConvertMathToLLVMInterface(registry);
   mlir::ub::registerConvertUBToLLVMInterface(registry);
   mlir::registerConvertMemRefToLLVMInterface(registry);
+  mlir::registerPass([] { return mlir::rcgmp::createVerifyOwnershipPass(); });
   mlir::registerPass([] { return mlir::rcgmp::createConvertRCGMPToSCFPass(); });
   mlir::registerPass([] { return mlir::createSCFToControlFlowPass(); });
   mlir::registerPass([] { return mlir::createReconcileUnrealizedCastsPass(); });

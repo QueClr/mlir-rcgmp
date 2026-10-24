@@ -39,7 +39,7 @@ rcgmp.release %integer : !rcgmp.mpz
 `rcgmp.extsi` and `rcgmp.extui` accept any signless integer width, and
 interpret the bits as signed two's complement and as unsigned, respectively.
 Atomicity must remain consistent for all aliases. Ownership is a caller
-contract; the dialect does not yet verify linear use.
+contract, which `-rcgmp-verify-ownership` checks (see below).
 
 For example, doubling consumes the original reference and its retained alias:
 
@@ -58,6 +58,43 @@ therefore be merged, and unused ones erased.
 %big = rcgmp.constant -340282366920938463463374607431768211456 : !rcgmp.mpz
 %square = rcgmp.muli %big, %big : !rcgmp.mpz
 ```
+
+## Ownership verification
+
+`rcgmp-opt -rcgmp-verify-ownership` checks that every function consumes each
+owned reference exactly once on every path. It counts the references each
+value owns: a value an operation allocates owns one, `rcgmp.retain` adds one,
+and each consuming operand position takes one. It rejects consuming or
+borrowing a value that owns no reference, returning while a reference is
+still owned, leaving a region while a value defined in it owns a reference,
+and paths that join with different counts. Constants are not counted.
+
+Operations state how they use an integer operand with the memory effects
+declared on it: freeing it consumes one reference, and any other effect
+borrows it. An integer result owns one reference when the operation
+allocates it; otherwise it owns none, as a handle rebuilt by
+`rcgmp.bridge.mpz.from_bits`, and may be borrowed or retained but must be
+retained before it is consumed. An operation declaring no effect on an
+integer operand is rejected. Embedders declare the same effects on their own
+operations.
+
+Functions own their integer arguments, and `func.return` consumes the
+returned values. A call through `func.call` or another call operation
+consumes its integer arguments, and its results own one reference each.
+
+Control flow is checked through the upstream branch and region interfaces, so
+`cf`, `scf`, and other dialects implementing them are supported. A value
+forwarded to a successor block, into a region, or to the results of a region
+operation gives up one reference, and the block argument, region argument, or
+result receiving it owns one. The arguments that `rcgmp.match` binds own one
+reference each. A region may use references owned outside it, but every path
+leaving the region must leave the same counts, so a loop body cannot consume
+a value defined outside the loop; pass it through iteration arguments
+instead. A path ending in a terminator that never returns, such as
+`llvm.unreachable`, may still own references.
+
+The check applies to IR before `-convert-rcgmp-to-scf`. Embedders can call
+`mlir::rcgmp::verifyOwnership` on their own IR.
 
 ## Build
 
@@ -97,6 +134,7 @@ if needed. Use `-DGMP_ROOT=/path/to/gmp` for a custom GMP prefix, or set
 - `lib/Conversion/ConvertRCGMPBridgeToLLVM.cpp`: bridges to LLVM instructions
   and runtime calls.
 - `lib/Conversion/ConvertRCGMPToLLVM.cpp`: type conversion and registration.
+- `lib/Analysis/VerifyOwnership.cpp`: the ownership verifier.
 - `runtime`: C++ modules implementing the C ABI in `RCGMP/Runtime`, linked as
   `RCGMP::Runtime`.
 - `tests`: IR checks and native tests compiled through the complete lowering.
