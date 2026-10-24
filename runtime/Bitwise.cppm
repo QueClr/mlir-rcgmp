@@ -169,6 +169,20 @@ Handle bitwiseXor(Handle lhs, Handle rhs, Reuse reuse) {
   return bitwise<counting, Logic::exclusiveDisjunction>(lhs, rhs, reuse);
 }
 
+// Tests a bit of a borrowed integer's two's complement. That of a negative
+// integer -m is ~(m - 1), whose limb at an index is the complement of the limb
+// of m there, less one exactly when every limb below it is zero.
+export bool testBit(Handle value, std::uintptr_t index) {
+  Magnitude magnitude(value);
+  std::size_t position = index / GMP_NUMB_BITS;
+  if (position >= magnitude.count())
+    return magnitude.negative;
+  Limb limb = magnitude.limbs[position];
+  if (magnitude.negative)
+    limb = mpn_zero_p(magnitude.limbs.data(), position) ? -limb : ~limb;
+  return limb >> index % GMP_NUMB_BITS & 1;
+}
+
 } // namespace rcgmp
 
 extern "C" {
@@ -201,5 +215,14 @@ void *rcgmp_mpz_xor(void *lhs, void *rhs, std::uint32_t reuse) {
 void *rcgmp_mpz_xor_atomic(void *lhs, void *rhs, std::uint32_t reuse) {
   return rcgmp::binaryEntryPoint<rcgmp::bitwiseXor<rcgmp::Counting::atomic>>(
       lhs, rhs, reuse);
+}
+
+std::int32_t rcgmp_mpz_tstbit(void *value, std::uintptr_t index) {
+  return rcgmp::testBit(rcgmp::Handle(value), index);
+}
+
+// Testing a bit reads no reference count, so atomicity makes no difference.
+std::int32_t rcgmp_mpz_tstbit_atomic(void *value, std::uintptr_t index) {
+  return rcgmp_mpz_tstbit(value, index);
 }
 }

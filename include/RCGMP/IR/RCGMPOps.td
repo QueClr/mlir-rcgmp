@@ -507,6 +507,29 @@ def RCGMP_Log2IOp : RCGMPOp<"log2i", [RCGMP_NotSpeculatable]> {
   let hasFolder = 1;
 }
 
+def RCGMP_TestBitIOp : RCGMPOp<"testbiti", [RCGMP_NotSpeculatable]> {
+  let summary = "Test one bit of a borrowed integer";
+  let description = [{
+    The result is the bit of the integer's infinite two's-complement
+    representation at the index, as for Lean's `Nat.testBit` and `Int.testBit`
+    and GMP's `mpz_tstbit`: bits beyond the magnitude are zero for a
+    nonnegative integer and one for a negative one. The index is an unsigned
+    number of bits, of any width, counted from the least significant bit. The
+    operand is borrowed, as by `rcgmp.cmpi`.
+
+    ```mlir
+    %bit = rcgmp.testbiti %x, %n : !rcgmp.mpz, i64
+    ```
+  }];
+  let arguments = (ins Arg<RCGMP_MpzType, "borrowed integer", [MemRead]>:$value,
+      AnySignlessInteger:$index);
+  let results = (outs I1:$result);
+  let assemblyFormat = [{
+    $value `,` $index attr-dict `:` type($value) `,` type($index)
+  }];
+  let hasFolder = 1;
+}
+
 def RCGMP_MatchOp : RCGMPOp<"match", [RCGMP_NotSpeculatable,
     RecursiveMemoryEffects, SingleBlockImplicitTerminator<"YieldOp">,
     DeclareOpInterfaceMethods<RegionBranchOpInterface, ["getSuccessorInputs"]>]> {

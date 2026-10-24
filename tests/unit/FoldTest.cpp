@@ -332,6 +332,22 @@ void checkLogs(const Integer &x, unsigned width) {
   }
 }
 
+// Bits of the two's complement, including those beyond the magnitude and at
+// an index beyond 64 bits, which is the sign.
+void checkBits(const Integer &x, unsigned index) {
+  Folder folder;
+  auto bit = [&](const APInt &index) {
+    std::optional<APInt> folded =
+        integerValue(folder.fold<mlir::rcgmp::TestBitIOp>(
+            folder.mpz(x), folder.integer(index))[0]);
+    return folded ? std::optional(folded->getBoolValue()) : std::nullopt;
+  };
+  EXPECT_EQ(bit(APInt(64, index)), mpz_tstbit(x, index) != 0)
+      << x << " bit " << index;
+  EXPECT_EQ(bit(APInt::getOneBitSet(128, 64) + index), x.negative())
+      << x << " bit 2^64 + " << index;
+}
+
 void FoldsMatchGmp(const std::pair<Integer, Integer> &operands, unsigned amount,
                    unsigned width) {
   auto &[x, y] = operands;
@@ -353,6 +369,7 @@ void FoldsMatchGmp(const std::pair<Integer, Integer> &operands, unsigned amount,
   checkComparisons(x, y);
   checkConversions(x, width);
   checkLogs(x, width);
+  checkBits(x, amount);
 }
 FUZZ_TEST(Fold, FoldsMatchGmp)
     .WithDomains(::rcgmp::test::AnyOperands(), fuzztest::InRange(0u, 400u),

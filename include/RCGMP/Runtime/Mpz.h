@@ -146,6 +146,13 @@ rcgmp_mpz_qr rcgmp_mpz_ediv_qr_lean_atomic(void *lhs, void *rhs,
 int32_t rcgmp_mpz_cmp(void *lhs, void *rhs);
 int32_t rcgmp_mpz_cmp_atomic(void *lhs, void *rhs);
 
+// Borrow value and return 1 if the bit at index of its two's complement is
+// set and 0 otherwise. Beyond the magnitude, the bits of a nonnegative value
+// are 0 and those of a negative one are 1, as for mpz_tstbit. Reference counts
+// are unchanged, and both entry points share one implementation.
+int32_t rcgmp_mpz_tstbit(void *value, uintptr_t index);
+int32_t rcgmp_mpz_tstbit_atomic(void *value, uintptr_t index);
+
 // Only for a heap value whose final decrement has already completed.
 void rcgmp_mpz_free(void *value, uint32_t atomic);
 

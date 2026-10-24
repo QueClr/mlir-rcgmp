@@ -673,6 +673,17 @@ OpFoldResult Log2IOp::fold(FoldAdaptor adaptor) {
   return IntegerAttr::get(getType(), APInt(64, log).zextOrTrunc(width));
 }
 
+OpFoldResult TestBitIOp::fold(FoldAdaptor adaptor) {
+  std::optional<APInt> value = mpzOperand(adaptor.getValue());
+  std::optional<std::uint64_t> index = shiftAmount(adaptor.getIndex());
+  if (!value || !index)
+    return {};
+  // Bits beyond the width are copies of the sign.
+  bool bit =
+      *index < value->getBitWidth() ? (*value)[*index] : value->isNegative();
+  return BoolAttr::get(getContext(), bit);
+}
+
 // Constants need no reference counting.
 LogicalResult RetainOp::canonicalize(RetainOp op, PatternRewriter &rewriter) {
   if (!op.getValue().getDefiningOp<ConstantOp>())
