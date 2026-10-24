@@ -18,26 +18,35 @@ include(FetchContent)
 FetchContent_Declare(fuzztest
   URL https://github.com/google/fuzztest/archive/39e5d587af63ba6209e0958a3141460ce003409c.tar.gz
   URL_HASH SHA256=32dd48a81d5d318110f9192ec52cdf191ebd403764aec64f62ba04b980297421
-  EXCLUDE_FROM_ALL)
+  EXCLUDE_FROM_ALL SYSTEM)
 # FuzzTest needs only the ANTLR runtime library.
 set(ANTLR_BUILD_CPP_TESTS OFF)
+# GoogleMock exports the include directories that GoogleTest inherits as system
+# ones, which would hide warnings in the project's headers from the tests, so
+# the dependencies inherit none.
+get_directory_property(rcgmp_include_directories INCLUDE_DIRECTORIES)
+set_directory_properties(PROPERTIES INCLUDE_DIRECTORIES "")
 FetchContent_MakeAvailable(fuzztest)
+set_directory_properties(PROPERTIES
+  INCLUDE_DIRECTORIES "${rcgmp_include_directories}")
 # Abseil's ABI depends on the language standard, so FuzzTest and the
-# dependencies it builds, which it sets to C++17, must match the tests.
-function(rcgmp_use_test_standard directory)
+# dependencies it builds, which it sets to C++17, must match the tests. Their
+# own sources build without warnings.
+function(rcgmp_configure_test_dependencies directory)
   get_property(targets DIRECTORY ${directory} PROPERTY BUILDSYSTEM_TARGETS)
   foreach(target IN LISTS targets)
     get_target_property(type ${target} TYPE)
     if(type MATCHES "^(STATIC_LIBRARY|OBJECT_LIBRARY|EXECUTABLE)$")
       set_target_properties(${target} PROPERTIES CXX_STANDARD 26)
+      target_compile_options(${target} PRIVATE -w)
     endif()
   endforeach()
   get_property(subdirectories DIRECTORY ${directory} PROPERTY SUBDIRECTORIES)
   foreach(subdirectory IN LISTS subdirectories)
-    rcgmp_use_test_standard(${subdirectory})
+    rcgmp_configure_test_dependencies(${subdirectory})
   endforeach()
 endfunction()
-rcgmp_use_test_standard(${fuzztest_SOURCE_DIR})
+rcgmp_configure_test_dependencies(${fuzztest_SOURCE_DIR})
 include(GoogleTest)
 
 add_library(RCGMPTesting STATIC)

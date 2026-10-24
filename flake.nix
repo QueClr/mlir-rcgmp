@@ -92,6 +92,9 @@
               ;
             cmakeFlags = [
               "-DRCGMP_ENABLE_TESTS=ON"
+              # The setup hook sets CMAKE_EXPORT_NO_PACKAGE_REGISTRY, which only
+              # export(PACKAGE) reads.
+              "--no-warn-unused-cli"
             ]
             ++ nixpkgs.lib.mapAttrsToList (
               name: source: "-DFETCHCONTENT_SOURCE_DIR_${name}=${source}"

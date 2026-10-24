@@ -901,19 +901,20 @@ void registerTruncations() {
         {"/heap", heap(lhsWords), &heapX}}) {
     // Direct calls, as GMP's are.
     benchmark::RegisterBenchmark(std::string("trunci") + label,
-                                 [=](benchmark::State &state) {
+                                 [=](benchmark::State &state) mutable {
                                    for (auto _ : state) {
                                      benchmark::DoNotOptimize(x);
                                      benchmark::DoNotOptimize(trunci(x));
                                    }
                                  });
-    benchmark::RegisterBenchmark(
-        std::string("trunci_overflow") + label, [=](benchmark::State &state) {
-          for (auto _ : state) {
-            benchmark::DoNotOptimize(x);
-            benchmark::DoNotOptimize(trunci_overflow(x));
-          }
-        });
+    benchmark::RegisterBenchmark(std::string("trunci_overflow") + label,
+                                 [=](benchmark::State &state) mutable {
+                                   for (auto _ : state) {
+                                     benchmark::DoNotOptimize(x);
+                                     benchmark::DoNotOptimize(
+                                         trunci_overflow(x));
+                                   }
+                                 });
     benchmark::RegisterBenchmark(std::string("gmp get_si") + label,
                                  [=](benchmark::State &state) {
                                    mpz_srcptr y = gmp->value;
@@ -945,7 +946,7 @@ void registerLogarithms() {
     for (auto [name, op] : {std::pair{"log2i", log2i},
                             {"shifted trunci log2", shifted_trunci_log2}})
       benchmark::RegisterBenchmark(std::string(name) + label,
-                                   [=](benchmark::State &state) {
+                                   [=](benchmark::State &state) mutable {
                                      for (auto _ : state) {
                                        benchmark::DoNotOptimize(x);
                                        benchmark::DoNotOptimize(op(x));
@@ -973,7 +974,7 @@ void registerOthers() {
           {"/heap, immediate", heap(lhsWords), immediate(smallRhs)},
           {"/heaps", heap(lhsWords), heap(rhsWords)}})
       benchmark::RegisterBenchmark("cmpi" + suffix + label,
-                                   [=](benchmark::State &state) {
+                                   [=](benchmark::State &state) mutable {
                                      for (auto _ : state) {
                                        benchmark::DoNotOptimize(x);
                                        benchmark::DoNotOptimize(compare(x, y));
