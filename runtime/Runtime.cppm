@@ -1,5 +1,5 @@
 // Integer handles, their heap representation and reference counting, and the
-// consuming unary and binary operations and comparison behind
+// consuming unary and binary operations, comparison, and hashing behind
 // RCGMP/Runtime/Mpz.h.
 export module rcgmp.runtime;
 
@@ -14,3 +14,4 @@ export import :power;
 export import :divide;
 export import :gcd;
 export import :compare;
+export import :hash;

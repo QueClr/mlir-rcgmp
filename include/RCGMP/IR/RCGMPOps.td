@@ -530,6 +530,28 @@ def RCGMP_TestBitIOp : RCGMPOp<"testbiti", [RCGMP_NotSpeculatable]> {
   let hasFolder = 1;
 }
 
+def RCGMP_HashIOp : RCGMPOp<"hashi", [RCGMP_NotSpeculatable]> {
+  let summary = "Hash a borrowed integer";
+  let description = [{
+    The result depends on the value alone, so equal integers hash equally
+    whatever their representation or reference counting. An integer in the
+    range of `i64` hashes to itself, so that hashing one converted from a
+    fixed-width integer costs nothing. Any other hashes by mixing its sign and
+    every 64 bits of its magnitude, so that integers differing only in their
+    high bits hash differently. The hash is meant to be combined further, as
+    hash tables do; it is not cryptographic. The operand is borrowed, as by
+    `rcgmp.cmpi`.
+
+    ```mlir
+    %h = rcgmp.hashi %x : !rcgmp.mpz
+    ```
+  }];
+  let arguments = (ins Arg<RCGMP_MpzType, "borrowed integer", [MemRead]>:$value);
+  let results = (outs I64:$result);
+  let assemblyFormat = "$value attr-dict `:` type($value)";
+  let hasFolder = 1;
+}
+
 def RCGMP_MatchOp : RCGMPOp<"match", [RCGMP_NotSpeculatable,
     RecursiveMemoryEffects, SingleBlockImplicitTerminator<"YieldOp">,
     DeclareOpInterfaceMethods<RegionBranchOpInterface, ["getSuccessorInputs"]>]> {

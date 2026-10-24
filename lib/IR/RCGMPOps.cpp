@@ -1,4 +1,5 @@
 #include "RCGMP/IR/RCGMPOps.h"
+#include "RCGMP/Runtime/Hash.h"
 #include <llvm/ADT/DenseMap.h>
 #include <llvm/ADT/DenseSet.h>
 #include <llvm/ADT/StringExtras.h>
@@ -682,6 +683,25 @@ OpFoldResult TestBitIOp::fold(FoldAdaptor adaptor) {
   bool bit =
       *index < value->getBitWidth() ? (*value)[*index] : value->isNegative();
   return BoolAttr::get(getContext(), bit);
+}
+
+OpFoldResult HashIOp::fold(FoldAdaptor adaptor) {
+  std::optional<APInt> value = mpzOperand(adaptor.getValue());
+  if (!value)
+    return {};
+  if (value->isSignedIntN(64))
+    return IntegerAttr::get(getType(), value->sextOrTrunc(64));
+  // The magnitude, widened to whole 64-bit chunks.
+  bool negative = value->isNegative();
+  APInt magnitude = value->sext(value->getBitWidth() + 1).abs();
+  unsigned chunks = llvm::divideCeil(magnitude.getActiveBits(), 64);
+  magnitude = magnitude.zextOrTrunc(chunks * 64);
+  std::uint64_t state = ::rcgmp::hashing::start(negative);
+  for (unsigned index = 0; index < chunks; ++index)
+    state = ::rcgmp::hashing::absorb(
+        state, magnitude.extractBitsAsZExtValue(64, index * 64));
+  return IntegerAttr::get(getType(),
+                          APInt(64, ::rcgmp::hashing::finish(state, chunks)));
 }
 
 // Constants need no reference counting.

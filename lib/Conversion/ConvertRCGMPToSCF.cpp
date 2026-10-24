@@ -1492,6 +1492,32 @@ struct TestBitILowering : FastPathLowering<TestBitILowering> {
   }
 };
 
+// Lowers rcgmp.hashi. An immediate is in the range of i64 and hashes to
+// itself; the runtime hashes a heap integer.
+struct HashILowering : FastPathLowering<HashILowering> {
+  using FastPathLowering::FastPathLowering;
+  using Op = HashIOp;
+
+  static constexpr bool consumesOperands = false;
+
+  static StringRef getRuntimeName(bool atomic) {
+    return atomic ? "rcgmp_mpz_hash_atomic" : "rcgmp_mpz_hash";
+  }
+
+  static FastPath buildFastPath(PatternRewriter &rewriter, Location loc,
+                                Operation *, ValueRange operands) {
+    Value bits = operands[0];
+    auto word = cast<IntegerType>(bits.getType());
+    Value value = arith::ShRSIOp::create(
+        rewriter, loc, bits,
+        arith::ConstantIntOp::create(rewriter, loc, word, 2));
+    auto i64 = rewriter.getI64Type();
+    if (word.getWidth() < 64)
+      value = arith::ExtSIOp::create(rewriter, loc, i64, value);
+    return {{value}, allImmediate(rewriter, loc, bits)};
+  }
+};
+
 struct CmpILowering : FastPathLowering<CmpILowering> {
   using FastPathLowering::FastPathLowering;
   using Op = CmpIOp;
@@ -1658,7 +1684,7 @@ struct ConvertRCGMPToSCFPass
              FloorModSILowering, DivRemSILowering, FloorDivModSILowering,
              EDivSILowering, EModSILowering, EDivModSILowering, CmpILowering,
              TruncationLowering<TruncIOp>, TruncationLowering<TruncIOverflowOp>,
-             Log2ILowering, TestBitILowering>(&getContext());
+             Log2ILowering, TestBitILowering, HashILowering>(&getContext());
     populateMatchLoweringPatterns(patterns);
     ConversionTarget target(getContext());
     target.addIllegalOp<
@@ -1667,7 +1693,7 @@ struct ConvertRCGMPToSCFPass
         ShLIOp, ShRSIOp, FloorMod2ExpIOp, IPowIOp, DivSIOp, RemSIOp,
         FloorDivSIOp, FloorModSIOp, DivRemSIOp, FloorDivModSIOp, EDivSIOp,
         EModSIOp, EDivModSIOp, CmpIOp, TruncIOp, TruncIOverflowOp, Log2IOp,
-        TestBitIOp, MatchOp, YieldOp>();
+        TestBitIOp, HashIOp, MatchOp, YieldOp>();
     target.markUnknownOpDynamicallyLegal([](Operation *) { return true; });
     if (failed(applyPartialConversion(getOperation(), target,
                                       std::move(patterns))))

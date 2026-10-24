@@ -226,6 +226,23 @@ func.func @bits() -> (i1, i1, i1, i1, i1) {
   return %a, %b, %c, %d, %e : i1, i1, i1, i1, i1
 }
 
+// Integers in the range of i64 hash to themselves, and others to a mixed
+// constant.
+// CHECK-LABEL: func.func @hashes
+// CHECK-DAG: %[[NEGATIVE:.*]] = arith.constant -5 : i64
+// CHECK-DAG: %[[MIN:.*]] = arith.constant -9223372036854775808 : i64
+// CHECK-NOT: rcgmp.hashi
+// CHECK: return %[[NEGATIVE]], %[[MIN]], %{{.*}} : i64, i64, i64
+func.func @hashes() -> (i64, i64, i64) {
+  %small = rcgmp.constant -5 : !rcgmp.mpz
+  %min = rcgmp.constant -9223372036854775808 : !rcgmp.mpz
+  %big = rcgmp.constant 340282366920938463463374607431768211456 : !rcgmp.mpz
+  %a = rcgmp.hashi %small : !rcgmp.mpz
+  %b = rcgmp.hashi %min : !rcgmp.mpz
+  %c = rcgmp.hashi %big : !rcgmp.mpz
+  return %a, %b, %c : i64, i64, i64
+}
+
 // Constants need no reference counting.
 // CHECK-LABEL: func.func @counting
 // CHECK-NOT: rcgmp.retain

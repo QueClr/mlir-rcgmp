@@ -153,6 +153,12 @@ int32_t rcgmp_mpz_cmp_atomic(void *lhs, void *rhs);
 int32_t rcgmp_mpz_tstbit(void *value, uintptr_t index);
 int32_t rcgmp_mpz_tstbit_atomic(void *value, uintptr_t index);
 
+// Borrow value and return its hash as rcgmp.hashi defines it, which depends on
+// the value alone. Reference counts are unchanged, and both entry points share
+// one implementation.
+int64_t rcgmp_mpz_hash(void *value);
+int64_t rcgmp_mpz_hash_atomic(void *value);
+
 // Only for a heap value whose final decrement has already completed.
 void rcgmp_mpz_free(void *value, uint32_t atomic);
 

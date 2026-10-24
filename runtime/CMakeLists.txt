@@ -2,7 +2,8 @@ option(RCGMP_RUNTIME_DEFAULT_ALLOCATOR "Provide default allocation hooks" ON)
 add_library(RCGMPRuntime STATIC)
 target_sources(RCGMPRuntime PUBLIC FILE_SET CXX_MODULES FILES
   Runtime.cppm Mpz.cppm Binary.cppm Add.cppm Multiply.cppm Bitwise.cppm
-  Unary.cppm Shift.cppm Power.cppm Divide.cppm Gcd.cppm Compare.cppm)
+  Unary.cppm Shift.cppm Power.cppm Divide.cppm Gcd.cppm Compare.cppm
+  Hash.cppm)
 if(RCGMP_RUNTIME_DEFAULT_ALLOCATOR)
   # Nothing imports this module, so a program's own hooks take precedence over
   # this archive member.

@@ -117,6 +117,7 @@ rcgmp_native_test(power)
 rcgmp_native_test(division)
 rcgmp_native_test(log2)
 rcgmp_native_test(testbit)
+rcgmp_native_test(hash)
 rcgmp_native_test(gcd)
 rcgmp_native_test(exact-division)
 

@@ -82,6 +82,7 @@ std::int64_t log2i(void *);
 std::int64_t shifted_trunci_log2(void *);
 std::int32_t testbiti(void *, std::int64_t);
 std::int32_t shifted_testbit(void *, std::int64_t);
+std::int64_t hashi(void *);
 void *gcdi(void *, void *);
 void *euclid(void *, void *);
 void *divsi_exact(void *, void *);
@@ -1007,6 +1008,30 @@ void registerBits() {
   }
 }
 
+// Hashes of borrowed integers: an immediate inline, and in the runtime a heap
+// integer in the range of int64_t, which hashes to itself, and mixed ones of
+// one and two limbs.
+void registerHashes() {
+  static constexpr std::array<std::uintptr_t, 1> signedWord{std::uintptr_t{1}
+                                                            << 62},
+      oneWord{lhsWords[0]};
+  for (auto [label, operand] : {
+           std::pair{"/immediate", RemainderOperand{smallLhs}},
+           {"/heap, int64", RemainderOperand{0, signedWord}},
+           {"/heap, one limb", RemainderOperand{0, oneWord}},
+           {"/heap", RemainderOperand{0, lhsWords}},
+       })
+    benchmark::RegisterBenchmark(std::string("hashi") + label,
+                                 [=](benchmark::State &state) {
+                                   void *x = operand.compiled();
+                                   for (auto _ : state) {
+                                     benchmark::DoNotOptimize(x);
+                                     benchmark::DoNotOptimize(hashi(x));
+                                   }
+                                   rcgmp_mpz_release(x, 0);
+                                 });
+}
+
 void registerOthers() {
   static Integer smallX(smallLhs), smallY(smallRhs), heapX(lhsWords),
       heapY(rhsWords), five(5);
@@ -1284,7 +1309,7 @@ void registerExactDivisions() {
     (registerBinaries(), registerMonus(), registerUnaries(), registerShifts(),
      registerRemainders(), registerPowers(), registerDivisions(),
      registerEuclidean(), registerLean(), registerTruncations(),
-     registerLogarithms(), registerBits(), registerOthers(), registerGcd(),
-     registerExactDivisions(), 0);
+     registerLogarithms(), registerBits(), registerHashes(), registerOthers(),
+     registerGcd(), registerExactDivisions(), 0);
 
 } // namespace

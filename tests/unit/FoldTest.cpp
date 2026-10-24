@@ -1,6 +1,7 @@
 // Folds operations on constants and compares the folded constants with GMP.
 #include "RCGMP/IR/RCGMPDialect.h"
 #include "RCGMP/IR/RCGMPOps.h"
+#include "RCGMP/Runtime/Mpz.h"
 #include <fuzztest/fuzztest.h>
 #include <gmp.h>
 #include <gtest/gtest.h>
@@ -348,6 +349,17 @@ void checkBits(const Integer &x, unsigned index) {
       << x << " bit 2^64 + " << index;
 }
 
+// The folded hash is the one the runtime computes for the same value.
+void checkHash(const Integer &x) {
+  Folder folder;
+  std::optional<APInt> folded =
+      integerValue(folder.fold<mlir::rcgmp::HashIOp>(folder.mpz(x))[0]);
+  ASSERT_TRUE(folded);
+  void *runtime = ::rcgmp::test::toRuntime(x);
+  EXPECT_EQ(folded->getSExtValue(), rcgmp_mpz_hash(runtime)) << "hashi " << x;
+  rcgmp_mpz_release(runtime, 0);
+}
+
 void FoldsMatchGmp(const std::pair<Integer, Integer> &operands, unsigned amount,
                    unsigned width) {
   auto &[x, y] = operands;
@@ -370,6 +382,7 @@ void FoldsMatchGmp(const std::pair<Integer, Integer> &operands, unsigned amount,
   checkConversions(x, width);
   checkLogs(x, width);
   checkBits(x, amount);
+  checkHash(x);
 }
 FUZZ_TEST(Fold, FoldsMatchGmp)
     .WithDomains(::rcgmp::test::AnyOperands(), fuzztest::InRange(0u, 400u),

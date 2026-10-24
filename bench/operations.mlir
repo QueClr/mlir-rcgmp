@@ -566,3 +566,7 @@ func.func @shifted_testbit(%x: !rcgmp.mpz, %n: i64) -> i32 {
   %e = arith.extui %r : i1 to i32
   return %e : i32
 }
+func.func @hashi(%x: !rcgmp.mpz) -> i64 {
+  %h = rcgmp.hashi %x : !rcgmp.mpz
+  return %h : i64
+}
