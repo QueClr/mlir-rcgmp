@@ -141,6 +141,7 @@ def RCGMP_AndIOp : RCGMP_BinaryOp<"andi", [{
     sign extension for negative integers.
   }], [Commutative]> {
   let summary = "Consume two integer references and produce their bitwise AND";
+  let hasCanonicalizer = 1;
 }
 
 def RCGMP_XOrIOp : RCGMP_BinaryOp<"xori", [{
@@ -222,6 +223,23 @@ def RCGMP_ShRSIOp : RCGMP_ShiftOp<"shrsi", [{
     two's-complement bits.
   }]> {
   let summary = "Consume an integer reference and shift it right arithmetically";
+}
+
+def RCGMP_FloorMod2ExpIOp : RCGMP_ShiftOp<"floormod2expi", [{
+    The result is the remainder of the integer by two to the power of the
+    amount, rounded toward negative infinity as by `rcgmp.floormodsi`, so that
+    it is nonnegative and less than that power: the low bits of the integer's
+    infinite two's complement, as many as the amount, read as an unsigned
+    integer. It is the remainder of the quotient that `rcgmp.shrsi` computes.
+    The remainder by two to the power zero is zero. An amount whose result
+    cannot be allocated terminates the program, like any allocation that fails.
+
+    ```mlir
+    %low = rcgmp.floormod2expi %x, %w : !rcgmp.mpz, i64
+    ```
+  }]> {
+  let summary = "Consume an integer reference and reduce it modulo a power of two";
+  let hasCanonicalizer = 1;
 }
 
 def RCGMP_IPowIOp : RCGMPOp<"ipowi", [AllTypesMatch<["base", "result"]>,
@@ -337,6 +355,7 @@ def RCGMP_FloorModSIOp : RCGMP_DivisionOp<"floormodsi", [{
     of rhs.
   }]> {
   let summary = "Consume two integer references and produce their floored remainder";
+  let hasCanonicalizer = 1;
 }
 
 def RCGMP_EDivSIOp : RCGMP_QuotientOp<"edivsi", [{
@@ -352,6 +371,7 @@ def RCGMP_EModSIOp : RCGMP_DivisionOp<"emodsi", [{
     magnitude of rhs.
   }]> {
   let summary = "Consume two integer references and produce their Euclidean remainder";
+  let hasCanonicalizer = 1;
 }
 
 class RCGMP_DivisionPairOp<string name, string semantics>

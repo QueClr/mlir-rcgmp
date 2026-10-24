@@ -604,6 +604,91 @@ struct ShRSILowering : FastPathLowering<ShRSILowering> {
   }
 };
 
+struct FloorMod2ExpILowering : FastPathLowering<FloorMod2ExpILowering> {
+  using FastPathLowering::FastPathLowering;
+  using Op = FloorMod2ExpIOp;
+
+  static StringRef getRuntimeName(bool atomic) {
+    return atomic ? "rcgmp_mpz_fdiv_r_2exp_atomic" : "rcgmp_mpz_fdiv_r_2exp";
+  }
+
+  static Value buildRuntimeOperand(PatternRewriter &rewriter, Location loc,
+                                   Value amount, IntegerType word) {
+    return saturatingWord(rewriter, loc, amount, word);
+  }
+
+  static FastPath buildFastPath(PatternRewriter &rewriter, Location loc,
+                                Operation *, ValueRange operands) {
+    Value bits = operands[0], amount = operands[1];
+    unsigned width = cast<IntegerType>(bits.getType()).getWidth();
+    auto constant = [&](int64_t value) -> Value {
+      return arith::ConstantIntOp::create(rewriter, loc, value, width);
+    };
+    // The tagged bits 4*x + 1 have bit 1 clear, so that their n + 2 low bits
+    // are 4*(x mod 2^n) + 1. An amount of W - 2 or more keeps all bits, the
+    // sign included, as 4 << (W - 2) wraps to zero.
+    auto shift =
+        arith::MinUIOp::create(rewriter, loc, amount, constant(width - 2));
+    auto power = arith::ShLIOp::create(rewriter, loc, constant(4), shift);
+    auto mask = arith::SubIOp::create(rewriter, loc, power, constant(1));
+    auto tagged = arith::AndIOp::create(rewriter, loc, bits, mask);
+    // Only the remainder of a negative x by 2^n with n at least W - 2 leaves
+    // the immediate range, as it is at least 2^(W-3), and only then are the
+    // tagged bits negative.
+    auto fits = arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::sge,
+                                      tagged, constant(0));
+    auto valid = arith::AndIOp::create(rewriter, loc, fits,
+                                       allImmediate(rewriter, loc, bits));
+    return {{tagged}, valid};
+  }
+
+  // Amounts up to W - 3 keep every immediate on the fast path, so that only
+  // heap integers reach this one with them. Their remainder is immediate, the
+  // low bits of the low limb, negated for a negative integer, and the integer
+  // is released without calling the runtime.
+  static Value buildSlowPath(PatternRewriter &rewriter, Location loc,
+                             Operation *op, function_ref<Value()> callRuntime) {
+    auto remainder = cast<FloorMod2ExpIOp>(op);
+    Value value = remainder.getValue();
+    Type type = value.getType();
+    unsigned width =
+        DataLayout::closest(op).getTypeSizeInBits(type).getFixedValue();
+    auto word = rewriter.getIntegerType(width);
+    auto constant = [&](int64_t value) -> Value {
+      return arith::ConstantIntOp::create(rewriter, loc, value, width);
+    };
+    Value amount = saturatingWord(rewriter, loc, remainder.getAmount(), word);
+    auto immediate = arith::CmpIOp::create(
+        rewriter, loc, arith::CmpIPredicate::ule, amount, constant(width - 3));
+    auto branch = scf::IfOp::create(rewriter, loc, TypeRange{type}, immediate,
+                                    /*withElseRegion=*/true);
+    OpBuilder::InsertionGuard guard(rewriter);
+    rewriter.setInsertionPointToStart(&branch.getThenRegion().front());
+    Value size = bridge::MpzSizeOp::create(rewriter, loc, word, value);
+    Value limb = bridge::MpzLimbOp::create(
+        rewriter, loc, word, value,
+        arith::ConstantIndexOp::create(rewriter, loc, 0));
+    auto negative = arith::CmpIOp::create(
+        rewriter, loc, arith::CmpIPredicate::slt, size, constant(0));
+    Value low = arith::SelectOp::create(
+        rewriter, loc, negative,
+        arith::SubIOp::create(rewriter, loc, constant(0), limb), limb);
+    auto power = arith::ShLIOp::create(rewriter, loc, constant(1), amount);
+    auto mask = arith::SubIOp::create(rewriter, loc, power, constant(1));
+    auto kept = arith::AndIOp::create(rewriter, loc, low, mask);
+    auto tagged = arith::OrIOp::create(
+        rewriter, loc, arith::ShLIOp::create(rewriter, loc, kept, constant(2)),
+        constant(1));
+    ReleaseOp::create(rewriter, loc, value);
+    scf::YieldOp::create(
+        rewriter, loc,
+        ValueRange{bridge::MpzFromBitsOp::create(rewriter, loc, type, tagged)});
+    rewriter.setInsertionPointToStart(&branch.getElseRegion().front());
+    scf::YieldOp::create(rewriter, loc, ValueRange{callRuntime()});
+    return branch.getResult(0);
+  }
+};
+
 // Exponents are unsigned. One wider than the handle saturates to the largest
 // word of the same parity: only the powers of bases of magnitude at most one
 // can be allocated for such exponents, and they depend on the parity alone.
@@ -1421,21 +1506,22 @@ struct ConvertRCGMPToSCFPass
                  ReleaseLowering, AddILowering, SubILowering, MonusILowering,
                  MulILowering, GcdILowering, AndILowering, XOrILowering,
                  OrILowering, NotILowering, NegILowering, AbsILowering,
-                 ShLILowering, ShRSILowering, IPowILowering, DivSILowering,
-                 RemSILowering, FloorDivSILowering, FloorModSILowering,
-                 DivRemSILowering, FloorDivModSILowering, EDivSILowering,
-                 EModSILowering, EDivModSILowering, CmpILowering,
-                 TruncationLowering<TruncIOp>,
+                 ShLILowering, ShRSILowering, FloorMod2ExpILowering,
+                 IPowILowering, DivSILowering, RemSILowering,
+                 FloorDivSILowering, FloorModSILowering, DivRemSILowering,
+                 FloorDivModSILowering, EDivSILowering, EModSILowering,
+                 EDivModSILowering, CmpILowering, TruncationLowering<TruncIOp>,
                  TruncationLowering<TruncIOverflowOp>, Log2ILowering>(
         &getContext());
     populateMatchLoweringPatterns(patterns);
     ConversionTarget target(getContext());
-    target.addIllegalOp<
-        ConstantOp, ExtSIOp, ExtUIOp, RetainOp, ReleaseOp, AddIOp, SubIOp,
-        MonusIOp, MulIOp, GcdIOp, AndIOp, XOrIOp, OrIOp, NotIOp, NegIOp, AbsIOp,
-        ShLIOp, ShRSIOp, IPowIOp, DivSIOp, RemSIOp, FloorDivSIOp, FloorModSIOp,
-        DivRemSIOp, FloorDivModSIOp, EDivSIOp, EModSIOp, EDivModSIOp, CmpIOp,
-        TruncIOp, TruncIOverflowOp, Log2IOp, MatchOp, YieldOp>();
+    target.addIllegalOp<ConstantOp, ExtSIOp, ExtUIOp, RetainOp, ReleaseOp,
+                        AddIOp, SubIOp, MonusIOp, MulIOp, GcdIOp, AndIOp,
+                        XOrIOp, OrIOp, NotIOp, NegIOp, AbsIOp, ShLIOp, ShRSIOp,
+                        FloorMod2ExpIOp, IPowIOp, DivSIOp, RemSIOp,
+                        FloorDivSIOp, FloorModSIOp, DivRemSIOp, FloorDivModSIOp,
+                        EDivSIOp, EModSIOp, EDivModSIOp, CmpIOp, TruncIOp,
+                        TruncIOverflowOp, Log2IOp, MatchOp, YieldOp>();
     target.markUnknownOpDynamicallyLegal([](Operation *) { return true; });
     if (failed(applyPartialConversion(getOperation(), target,
                                       std::move(patterns))))

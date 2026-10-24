@@ -69,6 +69,11 @@ void *rcgmp_mpz_shl(void *value, uintptr_t amount, uint32_t reuse);
 void *rcgmp_mpz_shl_atomic(void *value, uintptr_t amount, uint32_t reuse);
 void *rcgmp_mpz_shr(void *value, uintptr_t amount, uint32_t reuse);
 void *rcgmp_mpz_shr_atomic(void *value, uintptr_t amount, uint32_t reuse);
+// The remainder of the right shift, by 2^amount, which is nonnegative: the low
+// amount bits of value in two's complement. The same contract applies.
+void *rcgmp_mpz_fdiv_r_2exp(void *value, uintptr_t amount, uint32_t reuse);
+void *rcgmp_mpz_fdiv_r_2exp_atomic(void *value, uintptr_t amount,
+                                   uint32_t reuse);
 
 // Raise base to the power exponent, with the same ownership and reuse contract
 // as the unary operations. Any base to the power zero is one.

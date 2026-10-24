@@ -208,6 +208,60 @@ func.func @shrsi_atomic(%x: !rcgmp.mpz<atomic>, %n: i64) -> !rcgmp.mpz<atomic> {
   %r = rcgmp.shrsi %x, %n : !rcgmp.mpz<atomic>, i64
   return %r : !rcgmp.mpz<atomic>
 }
+func.func @floormod2expi(%x: !rcgmp.mpz, %n: i64) -> !rcgmp.mpz {
+  %r = rcgmp.floormod2expi %x, %n : !rcgmp.mpz, i64
+  return %r : !rcgmp.mpz
+}
+func.func @floormod2expi_atomic(%x: !rcgmp.mpz<atomic>, %n: i64) -> !rcgmp.mpz<atomic> {
+  %r = rcgmp.floormod2expi %x, %n : !rcgmp.mpz<atomic>, i64
+  return %r : !rcgmp.mpz<atomic>
+}
+func.func @floormod2expi_32(%x: !rcgmp.mpz) -> !rcgmp.mpz {
+  %n = arith.constant 32 : i64
+  %r = rcgmp.floormod2expi %x, %n : !rcgmp.mpz, i64
+  return %r : !rcgmp.mpz
+}
+func.func @floormod2expi_64(%x: !rcgmp.mpz) -> !rcgmp.mpz {
+  %n = arith.constant 64 : i64
+  %r = rcgmp.floormod2expi %x, %n : !rcgmp.mpz, i64
+  return %r : !rcgmp.mpz
+}
+// The forms that compute the remainder without floormod2expi, which the
+// canonicalizer would replace by it: a mask of 2^n - 1, and the Euclidean
+// remainder by 2^n, for a variable and a constant n.
+func.func @andi_mask(%x: !rcgmp.mpz, %n: i64) -> !rcgmp.mpz {
+  %one = rcgmp.constant 1 : !rcgmp.mpz
+  %power = rcgmp.shli %one, %n : !rcgmp.mpz, i64
+  %mask = rcgmp.subi %power, %one : !rcgmp.mpz
+  %r = rcgmp.andi %x, %mask : !rcgmp.mpz
+  return %r : !rcgmp.mpz
+}
+func.func @emodsi_power(%x: !rcgmp.mpz, %n: i64) -> !rcgmp.mpz {
+  %one = rcgmp.constant 1 : !rcgmp.mpz
+  %power = rcgmp.shli %one, %n : !rcgmp.mpz, i64
+  %r = rcgmp.emodsi %x, %power : !rcgmp.mpz
+  return %r : !rcgmp.mpz
+}
+func.func @andi_32(%x: !rcgmp.mpz) -> !rcgmp.mpz {
+  %mask = rcgmp.constant 4294967295 : !rcgmp.mpz
+  %r = rcgmp.andi %x, %mask : !rcgmp.mpz
+  return %r : !rcgmp.mpz
+}
+func.func @andi_64(%x: !rcgmp.mpz) -> !rcgmp.mpz {
+  %mask = rcgmp.constant 18446744073709551615 : !rcgmp.mpz
+  %r = rcgmp.andi %x, %mask : !rcgmp.mpz
+  return %r : !rcgmp.mpz
+}
+func.func @emodsi_32(%x: !rcgmp.mpz) -> !rcgmp.mpz {
+  %power = rcgmp.constant 4294967296 : !rcgmp.mpz
+  %r = rcgmp.emodsi %x, %power : !rcgmp.mpz
+  return %r : !rcgmp.mpz
+}
+func.func @emodsi_64(%x: !rcgmp.mpz) -> !rcgmp.mpz {
+  %power = rcgmp.constant 18446744073709551616 : !rcgmp.mpz
+  %r = rcgmp.emodsi %x, %power : !rcgmp.mpz
+  return %r : !rcgmp.mpz
+}
 func.func @ipowi(%x: !rcgmp.mpz, %n: i64) -> !rcgmp.mpz {
   %r = rcgmp.ipowi %x, %n : !rcgmp.mpz, i64
   return %r : !rcgmp.mpz

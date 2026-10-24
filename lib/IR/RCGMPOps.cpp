@@ -280,6 +280,110 @@ OpFoldResult ShRSIOp::fold(FoldAdaptor adaptor) {
   return foldedMpz(getContext(), value->ashr(*amount));
 }
 
+OpFoldResult FloorMod2ExpIOp::fold(FoldAdaptor adaptor) {
+  std::optional<APInt> value = mpzOperand(adaptor.getValue());
+  if (!value)
+    return {};
+  // A nonnegative integer below the power, as zero is for any amount, is its
+  // own remainder, and its reference becomes the result's.
+  std::optional<std::uint64_t> amount = shiftAmount(adaptor.getAmount());
+  if (!value->isNegative() &&
+      (value->isZero() || (amount && *amount >= value->getActiveBits())))
+    return getValue();
+  // The remainder of a negative integer may have as many bits as the amount.
+  if (!amount || *amount > maxFoldedBits)
+    return {};
+  return foldedMpz(getContext(), value->sextOrTrunc(*amount).zext(*amount + 1));
+}
+
+namespace {
+
+// The remainder by two to the power zero is zero, which needs no reference, so
+// the integer is released.
+struct ZeroAmount : OpRewritePattern<FloorMod2ExpIOp> {
+  using OpRewritePattern::OpRewritePattern;
+  LogicalResult matchAndRewrite(FloorMod2ExpIOp op,
+                                PatternRewriter &rewriter) const override {
+    if (!matchPattern(op.getAmount(), m_Zero()))
+      return failure();
+    ReleaseOp::create(rewriter, op.getLoc(), op.getValue());
+    rewriter.replaceOpWithNewOp<ConstantOp>(op, op.getType(), APInt(1, 0));
+    return success();
+  }
+};
+
+} // namespace
+
+void FloorMod2ExpIOp::getCanonicalizationPatterns(RewritePatternSet &patterns,
+                                                  MLIRContext *context) {
+  patterns.add<ZeroAmount>(context);
+}
+
+// A remainder by 2^k that is nonnegative, as a Euclidean one is and a floored
+// one by a positive divisor, is computed by rcgmp.floormod2expi without
+// division. A Euclidean remainder depends only on the magnitude of the
+// divisor. The divisor is a constant, which needs no release, or a shift of
+// one used only here, which is then dropped.
+template <typename Op>
+static LogicalResult remainderByPowerOfTwo(Op op, PatternRewriter &rewriter) {
+  Operation *divisor = op.getRhs().getDefiningOp();
+  Value amount;
+  if (auto constant = dyn_cast_or_null<ConstantOp>(divisor)) {
+    APInt value = constant.getValue();
+    if (std::is_same_v<Op, EModSIOp>)
+      value = value.sext(value.getBitWidth() + 1).abs();
+    if (!value.isStrictlyPositive() || !value.isPowerOf2())
+      return failure();
+    amount = arith::ConstantIntOp::create(rewriter, op.getLoc(),
+                                          value.exactLogBase2(), 64);
+  } else if (auto shift = dyn_cast_or_null<ShLIOp>(divisor)) {
+    auto one = shift.getValue().getDefiningOp<ConstantOp>();
+    if (!one || !one.getValue().isOne() || !shift->hasOneUse())
+      return failure();
+    amount = shift.getAmount();
+  } else {
+    return failure();
+  }
+  rewriter.replaceOpWithNewOp<FloorMod2ExpIOp>(op, op.getType(), op.getLhs(),
+                                               amount);
+  if (isa<ShLIOp>(divisor))
+    rewriter.eraseOp(divisor);
+  return success();
+}
+
+void EModSIOp::getCanonicalizationPatterns(RewritePatternSet &patterns,
+                                           MLIRContext *) {
+  patterns.add(remainderByPowerOfTwo<EModSIOp>);
+}
+
+void FloorModSIOp::getCanonicalizationPatterns(RewritePatternSet &patterns,
+                                               MLIRContext *) {
+  patterns.add(remainderByPowerOfTwo<FloorModSIOp>);
+}
+
+// Masking with 2^k - 1 keeps the low k bits, which rcgmp.floormod2expi
+// computes from k alone: inline for heap integers when the mask is immediate,
+// and for nonnegative immediates when it is not, where rcgmp.andi calls the
+// runtime. Constant operands of a commutative operation sort to the right.
+static LogicalResult maskToRemainder(AndIOp op, PatternRewriter &rewriter) {
+  auto mask = op.getRhs().getDefiningOp<ConstantOp>();
+  if (!mask)
+    return failure();
+  APInt value = mask.getValue();
+  if (value.isNegative() || value.countr_one() != value.getActiveBits())
+    return failure();
+  auto amount = arith::ConstantIntOp::create(rewriter, op.getLoc(),
+                                             value.getActiveBits(), 64);
+  rewriter.replaceOpWithNewOp<FloorMod2ExpIOp>(op, op.getType(), op.getLhs(),
+                                               amount);
+  return success();
+}
+
+void AndIOp::getCanonicalizationPatterns(RewritePatternSet &patterns,
+                                         MLIRContext *) {
+  patterns.add(maskToRemainder);
+}
+
 OpFoldResult IPowIOp::fold(FoldAdaptor adaptor) {
   std::optional<APInt> base = mpzOperand(adaptor.getBase()),
                        exponent = integerOperand(adaptor.getExponent());

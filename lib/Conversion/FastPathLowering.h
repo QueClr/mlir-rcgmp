@@ -160,10 +160,13 @@ template <typename Derived> struct FastPathLowering : RewritePattern {
     scf::YieldOp::create(rewriter, loc, immediates);
 
     rewriter.setInsertionPointToStart(&branch.getElseRegion().front());
-    if (passReuse)
-      arguments.push_back(reuseMask(rewriter, loc, handles));
+    // The reuse mask is built where the runtime is called, which a slow path
+    // may do in only some of its branches.
     auto call = [&] {
-      return func::CallOp::create(rewriter, loc, function, arguments);
+      SmallVector<Value> callArguments(arguments);
+      if (passReuse)
+        callArguments.push_back(reuseMask(rewriter, loc, handles));
+      return func::CallOp::create(rewriter, loc, function, callArguments);
     };
     if (single)
       scf::YieldOp::create(rewriter, loc,

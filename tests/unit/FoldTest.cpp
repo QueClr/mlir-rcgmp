@@ -4,6 +4,7 @@
 #include <fuzztest/fuzztest.h>
 #include <gmp.h>
 #include <gtest/gtest.h>
+#include <llvm/ADT/StringExtras.h>
 #include <mlir/Dialect/Arith/IR/Arith.h>
 #include <mlir/IR/Builders.h>
 #include <mlir/IR/BuiltinOps.h>
@@ -147,6 +148,18 @@ void checkShifts(const Integer &x, unsigned amount) {
                                                        folder.mpz(x), bits)[0]),
             right)
       << x << " >> " << amount;
+}
+
+// A remainder by a power of two has at most 400 bits here, which folds.
+void checkFloorMod2Exp(const Integer &x, unsigned amount) {
+  Folder folder;
+  Integer expected;
+  mpz_fdiv_r_2exp(expected, x, amount);
+  EXPECT_EQ(mpzValue(folder.fold<mlir::rcgmp::FloorMod2ExpIOp>(
+                folder.mpzType(), folder.mpz(x),
+                folder.integer(APInt(64, amount)))[0]),
+            expected)
+      << x << " modulo 2^" << amount;
 }
 
 // A power folds exactly when it has at most 4096 significant bits.
@@ -334,6 +347,7 @@ void FoldsMatchGmp(const std::pair<Integer, Integer> &operands, unsigned amount,
   checkUnary<mlir::rcgmp::NegIOp>(x, mpz_neg);
   checkUnary<mlir::rcgmp::AbsIOp>(x, mpz_abs);
   checkShifts(x, amount);
+  checkFloorMod2Exp(x, amount);
   checkPower(x, amount);
   checkDivisions(x, y);
   checkComparisons(x, y);
@@ -369,6 +383,34 @@ TEST(Fold, KeepsGcdOfWideOperands) {
   EXPECT_EQ(mpzValue(folder.fold<mlir::rcgmp::GcdIOp>(
                 folder.mpzType(), wide, folder.mpz(Integer(6)))[0]),
             std::nullopt);
+}
+
+// A nonnegative integer below the power is its own remainder, however wide
+// either is. That of a negative integer has as many bits as the amount, and
+// folds only up to 4096 of them.
+TEST(Fold, FoldsRemaindersByWideAmounts) {
+  Folder folder;
+  Integer wide = Integer::powerOfTwo(5000) + 1, expected;
+  for (auto [value, amount, folds] :
+       {std::tuple{wide, APInt::getOneBitSet(128, 64), true},
+        {wide, APInt(64, 5001), true},
+        {Integer(-1), APInt::getOneBitSet(128, 64), false},
+        {Integer(-1), APInt(64, 4095), true},
+        {Integer(-1), APInt(64, 4096), false},
+        {-wide, APInt(64, 5000), false}}) {
+    std::optional<Integer> folded =
+        mpzValue(folder.fold<mlir::rcgmp::FloorMod2ExpIOp>(
+            folder.mpzType(), folder.mpz(value), folder.integer(amount))[0]);
+    std::string power = "2^" + llvm::toString(amount, 10, false);
+    if (!folds) {
+      EXPECT_FALSE(folded) << value << " modulo " << power << " was folded";
+      continue;
+    }
+    // An amount beyond 64 bits saturates for GMP, which leaves the
+    // nonnegative integers here unchanged as well.
+    mpz_fdiv_r_2exp(expected, value, amount.getLimitedValue());
+    EXPECT_EQ(folded, expected) << value << " modulo " << power;
+  }
 }
 
 // The parity of an exponent wider than 64 bits decides the sign of a power of

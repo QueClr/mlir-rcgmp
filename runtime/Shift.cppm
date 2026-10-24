@@ -7,6 +7,7 @@ module;
 #include <cstdint>
 #include <limits>
 #include <numeric>
+#include <optional>
 #include <span>
 export module rcgmp.runtime:shift;
 import :binary;
@@ -121,6 +122,60 @@ Handle shiftRight(Handle value, std::uintptr_t amount, bool reuse) {
   return total > 1 ? Handle(result) : normalize<counting>(result);
 }
 
+// The remainder by 2^amount of the quotient that shiftRight rounds toward
+// negative infinity, which is nonnegative: the low amount bits of the two's
+// complement. A nonnegative integer keeps its low limbs, the top one masked. A
+// negative integer x keeps those of the two's complement of its magnitude,
+// 2^amount - (|x| mod 2^amount), which is all ones beyond the magnitude, and
+// zero where |x| mod 2^amount is.
+export template <Counting counting>
+Handle floorModPowerOfTwo(Handle value, std::uintptr_t amount, bool reuse) {
+  Magnitude x(value);
+  std::size_t count = x.count();
+  std::size_t limbs = amount / limbBits;
+  unsigned bits = amount % limbBits;
+  // A nonnegative integer below 2^amount is its own remainder, and the
+  // consumed reference becomes the result's.
+  if (!x.negative &&
+      (limbs >= count || (limbs + 1 == count && !(x.limbs[limbs] >> bits))))
+    return value;
+  // A remainder of one limb at most is often immediate, so it allocates only
+  // when it is not.
+  if (amount <= limbBits) {
+    Limb mask = amount < limbBits ? (Limb{1} << amount) - 1 : ~Limb{0};
+    Limb low = (x.negative ? -x.limb(0) : x.limb(0)) & mask;
+    if (std::optional<Handle> small = Handle::immediate(low, false)) {
+      release<counting>(value);
+      return *small;
+    }
+    Mpz &result = shiftDestination(value, reuse, 1);
+    result.limbs()[0] = low;
+    result.setMagnitude(1, false);
+    if (Handle(result) != value)
+      release<counting>(value);
+    return Handle(result);
+  }
+  // A nonnegative integer has more limbs than the remainder, and a negative
+  // one may have fewer.
+  std::size_t total = limbs + (bits != 0);
+  std::size_t available = std::min(total, count);
+  Mpz &result = shiftDestination(value, reuse, total);
+  Limb *out = result.limbs().data();
+  const Limb *in = x.limbs.data();
+  if (x.negative) {
+    mpn_neg(out, in, available);
+    std::fill(out + available, out + total, ~Limb{0});
+  } else if (out != in) {
+    std::copy(in, in + total, out);
+  }
+  if (bits)
+    out[total - 1] &= (Limb{1} << bits) - 1;
+  result.setMagnitude(total, false);
+  if (Handle(result) != value)
+    release<counting>(value);
+  return normalize<counting>(result);
+}
+
 // Adapts a shift to the runtime ABI, where bit 0 of reuse permits reusing the
 // operand.
 template <auto shift>
@@ -152,5 +207,18 @@ void *rcgmp_mpz_shr_atomic(void *value, std::uintptr_t amount,
                            std::uint32_t reuse) {
   return rcgmp::shiftEntryPoint<rcgmp::shiftRight<rcgmp::Counting::atomic>>(
       value, amount, reuse);
+}
+
+void *rcgmp_mpz_fdiv_r_2exp(void *value, std::uintptr_t amount,
+                            std::uint32_t reuse) {
+  return rcgmp::shiftEntryPoint<
+      rcgmp::floorModPowerOfTwo<rcgmp::Counting::nonatomic>>(value, amount,
+                                                             reuse);
+}
+
+void *rcgmp_mpz_fdiv_r_2exp_atomic(void *value, std::uintptr_t amount,
+                                   std::uint32_t reuse) {
+  return rcgmp::shiftEntryPoint<
+      rcgmp::floorModPowerOfTwo<rcgmp::Counting::atomic>>(value, amount, reuse);
 }
 }

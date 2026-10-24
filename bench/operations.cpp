@@ -11,6 +11,7 @@
 #include <array>
 #include <cstdint>
 #include <deque>
+#include <span>
 #include <string>
 #include <string_view>
 #include <tuple>
@@ -33,6 +34,7 @@ RCGMP_ENTRY(void *, negi, void *)
 RCGMP_ENTRY(void *, absi, void *)
 RCGMP_ENTRY(void *, shli, void *, std::int64_t)
 RCGMP_ENTRY(void *, shrsi, void *, std::int64_t)
+RCGMP_ENTRY(void *, floormod2expi, void *, std::int64_t)
 RCGMP_ENTRY(void *, ipowi, void *, std::int64_t)
 RCGMP_ENTRY(std::int32_t, cmpi, void *, void *)
 RCGMP_ENTRY(void *, extsi, std::int64_t)
@@ -40,6 +42,14 @@ RCGMP_ENTRY(void *, retain, void *)
 RCGMP_ENTRY(void, release, void *)
 #undef RCGMP_ENTRY
 void *guarded_subi(void *, void *);
+void *floormod2expi_32(void *);
+void *floormod2expi_64(void *);
+void *andi_mask(void *, std::int64_t);
+void *emodsi_power(void *, std::int64_t);
+void *andi_32(void *);
+void *andi_64(void *);
+void *emodsi_32(void *);
+void *emodsi_64(void *);
 void *ipowi_two(std::int64_t);
 void *shli_one(std::int64_t);
 void *square_muli(void *);
@@ -449,6 +459,132 @@ void registerShifts() {
           benchmark::DoNotOptimize(x.value);
         }
       });
+}
+
+// An eight-limb magnitude, least significant limb first.
+constexpr std::array<std::uintptr_t, 8> longWords{
+    0x9e3779b97f4a7c15, 0xbf58476d1ce4e5b9, 0x94d049bb133111eb,
+    0x2545f4914f6cdd1d, 0xd6e8feb86659fd93, 0xa0761d6478bd642f,
+    0xe7037ed1a0b428db, 0x1234567};
+
+// An immediate operand, or a heap operand of the given limbs and sign.
+struct RemainderOperand {
+  std::intptr_t small;
+  std::span<const std::uintptr_t> words = {};
+  bool negative = false;
+
+  // The compiled operand, which owns one reference.
+  void *compiled() const {
+    return words.empty()
+               ? immediate(small)
+               : rcgmp_mpz_from_words(words.data(), words.size(), negative, 0);
+  }
+  void gmp(mpz_ptr value) const {
+    if (words.empty()) {
+      mpz_set_si(value, small);
+      return;
+    }
+    mpz_import(value, words.size(), -1, sizeof(std::uintptr_t), 0, 0,
+               words.data());
+    if (negative)
+      mpz_neg(value, value);
+  }
+};
+
+// Applies a remainder to an operand, retaining a heap operand first so that
+// the result needs storage of its own unless it is the operand, and releases
+// the result, as the shift benchmarks do.
+template <typename Apply>
+void remainder(benchmark::State &state, Counted counted, Apply apply,
+               const RemainderOperand &operand) {
+  void *x = operand.compiled();
+  bool shared = !operand.words.empty();
+  for (auto _ : state) {
+    benchmark::DoNotOptimize(x);
+    if (shared)
+      counted.retain(x);
+    counted.release(apply(x));
+  }
+  counted.release(x);
+}
+
+// Remainders by powers of two of immediates and of shared heap integers of
+// either sign, with powers below and above them, next to GMP and to the forms
+// that compute them without floormod2expi: a mask of 2^n - 1, and the
+// Euclidean remainder by 2^n. Constant amounts compare with constant masks and
+// divisors.
+void registerRemainders() {
+  struct RemainderCase {
+    const char *label;
+    RemainderOperand operand;
+    std::int64_t amount;
+  };
+  const std::array<RemainderCase, 14> cases{{
+      {"/immediate, 20 bits", {smallLhs}, 20},
+      {"/negative immediate, 20 bits", {-smallLhs}, 20},
+      {"/immediate, 64 bits", {smallLhs}, 64},
+      {"/negative immediate, 64 bits", {-smallLhs}, 64},
+      {"/shared heap, 20 bits", {0, lhsWords}, 20},
+      {"/shared heap, 80 bits", {0, lhsWords}, 80},
+      {"/shared heap, 200 bits", {0, lhsWords}, 200},
+      {"/shared negative heap, 20 bits", {0, lhsWords, true}, 20},
+      {"/shared negative heap, 80 bits", {0, lhsWords, true}, 80},
+      {"/shared negative heap, 200 bits", {0, lhsWords, true}, 200},
+      {"/shared heap of 8 limbs, 300 bits", {0, longWords}, 300},
+      {"/shared heap of 8 limbs, 600 bits", {0, longWords}, 600},
+      {"/shared negative heap of 8 limbs, 300 bits", {0, longWords, true}, 300},
+      {"/shared negative heap of 8 limbs, 600 bits", {0, longWords, true}, 600},
+  }};
+  using Remainder = void *(*)(void *, std::int64_t);
+  for (const RemainderCase &test : cases) {
+    auto [label, operand, amount] = test;
+    for (int counting = 0; counting < 2; ++counting)
+      benchmark::RegisterBenchmark(
+          std::string("floormod2expi") + suffixes[counting] + label,
+          [=](benchmark::State &state) {
+            Remainder apply = counting ? floormod2expi_atomic : floormod2expi;
+            remainder(
+                state, countings[counting],
+                [=](void *x) { return apply(x, amount); }, operand);
+          });
+    for (auto [name, apply] :
+         {std::pair{"andi mask", andi_mask}, {"emodsi power", emodsi_power}})
+      benchmark::RegisterBenchmark(
+          name + std::string(label), [=](benchmark::State &state) {
+            remainder(
+                state, countings[0], [=](void *x) { return apply(x, amount); },
+                operand);
+          });
+    benchmark::RegisterBenchmark(std::string("gmp fdiv_r_2exp") + label,
+                                 [=](benchmark::State &state) {
+                                   mpz_t x;
+                                   mpz_init(x);
+                                   operand.gmp(x);
+                                   for (auto _ : state) {
+                                     mpz_t result;
+                                     mpz_init(result);
+                                     mpz_fdiv_r_2exp(result, x, amount);
+                                     benchmark::DoNotOptimize(result);
+                                     mpz_clear(result);
+                                   }
+                                   mpz_clear(x);
+                                 });
+  }
+  for (auto [label, operand] :
+       {std::pair{"/immediate", RemainderOperand{smallLhs}},
+        {"/negative immediate", {-smallLhs}},
+        {"/shared heap", {0, lhsWords}},
+        {"/shared negative heap", {0, lhsWords, true}}})
+    for (auto [name, apply] : {std::pair{"floormod2expi 32", floormod2expi_32},
+                               {"andi 2^32-1", andi_32},
+                               {"emodsi 2^32", emodsi_32},
+                               {"floormod2expi 64", floormod2expi_64},
+                               {"andi 2^64-1", andi_64},
+                               {"emodsi 2^64", emodsi_64}})
+      benchmark::RegisterBenchmark(
+          name + std::string(label), [=](benchmark::State &state) {
+            remainder(state, countings[0], apply, operand);
+          });
 }
 
 // Powers of immediates on the inline path and in the runtime, and of a shared
@@ -1101,8 +1237,9 @@ void registerExactDivisions() {
 
 [[maybe_unused]] const int registered =
     (registerBinaries(), registerMonus(), registerUnaries(), registerShifts(),
-     registerPowers(), registerDivisions(), registerEuclidean(), registerLean(),
-     registerTruncations(), registerLogarithms(), registerOthers(),
-     registerGcd(), registerExactDivisions(), 0);
+     registerRemainders(), registerPowers(), registerDivisions(),
+     registerEuclidean(), registerLean(), registerTruncations(),
+     registerLogarithms(), registerOthers(), registerGcd(),
+     registerExactDivisions(), 0);
 
 } // namespace
