@@ -10,6 +10,7 @@
 #include <mlir/IR/BuiltinOps.h>
 #include <mlir/IR/OwningOpRef.h>
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -61,6 +62,9 @@ public:
     return mlir::rcgmp::ConstantOp::create(builder, location(), mpzType(),
                                            toAPInt(value));
   }
+  Value index(std::uint64_t value) {
+    return arith::ConstantIndexOp::create(builder, location(), value);
+  }
   Value integer(const APInt &value) {
     return arith::ConstantOp::create(
         builder, location(),
@@ -80,6 +84,7 @@ public:
   IntegerType integerType(unsigned width) {
     return builder.getIntegerType(width);
   }
+  Type indexType() { return builder.getIndexType(); }
 
   static MLIRContext &context() {
     static MLIRContext *context = [] {
@@ -348,6 +353,23 @@ void checkBits(const Integer &x, unsigned index) {
       << x << " bit 2^64 + " << index;
 }
 
+// Limbs of the magnitude, as GMP counts and reads them, up to one beyond the
+// count, which is zero.
+void checkLimbs(const Integer &x) {
+  Folder folder;
+  Value value = folder.mpz(x);
+  std::optional<APInt> count = integerValue(
+      folder.fold<mlir::rcgmp::LimbCountOp>(folder.indexType(), value)[0]);
+  ASSERT_TRUE(count) << x;
+  EXPECT_EQ(count->getZExtValue(), mpz_size(x)) << x;
+  for (std::size_t i = 0; i <= mpz_size(x); ++i) {
+    std::optional<APInt> limb = integerValue(folder.fold<mlir::rcgmp::LimbOp>(
+        folder.integerType(GMP_NUMB_BITS), value, folder.index(i))[0]);
+    ASSERT_TRUE(limb) << x << " limb " << i;
+    EXPECT_EQ(limb->getZExtValue(), mpz_getlimbn(x, i)) << x << " limb " << i;
+  }
+}
+
 void FoldsMatchGmp(const std::pair<Integer, Integer> &operands, unsigned amount,
                    unsigned width) {
   auto &[x, y] = operands;
@@ -370,6 +392,7 @@ void FoldsMatchGmp(const std::pair<Integer, Integer> &operands, unsigned amount,
   checkConversions(x, width);
   checkLogs(x, width);
   checkBits(x, amount);
+  checkLimbs(x);
 }
 FUZZ_TEST(Fold, FoldsMatchGmp)
     .WithDomains(::rcgmp::test::AnyOperands(), fuzztest::InRange(0u, 400u),

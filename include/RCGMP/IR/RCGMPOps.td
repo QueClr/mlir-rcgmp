@@ -530,6 +530,51 @@ def RCGMP_TestBitIOp : RCGMPOp<"testbiti", [RCGMP_NotSpeculatable]> {
   let hasFolder = 1;
 }
 
+def RCGMP_LimbCountOp : RCGMPOp<"limb_count", [RCGMP_NotSpeculatable]> {
+  let summary = "Count the limbs of the magnitude of a borrowed integer";
+  let description = [{
+    The result is the number of limbs of the absolute value of the integer,
+    as for GMP's `mpz_size`: the least `n` such that the absolute value is
+    below 2^(W * n), where the limb width W is the handle width from the data
+    layout. Zero has no limbs. The operand is borrowed, as by `rcgmp.cmpi`.
+
+    With `rcgmp.limb`, this reads the magnitude of an integer limb by limb.
+    Both depend only on the value, not on whether it is immediate.
+
+    ```mlir
+    %n = rcgmp.limb_count %x : !rcgmp.mpz
+    ```
+  }];
+  let arguments = (ins Arg<RCGMP_MpzType, "borrowed integer", [MemRead]>:$value);
+  let results = (outs Index:$result);
+  let assemblyFormat = "$value attr-dict `:` type($value)";
+  let hasFolder = 1;
+}
+
+def RCGMP_LimbOp : RCGMPOp<"limb", [RCGMP_NotSpeculatable]> {
+  let summary = "Read one limb of the magnitude of a borrowed integer";
+  let description = [{
+    The result is the limb of the absolute value of the integer at the index,
+    counted from the least significant, as for GMP's `mpz_getlimbn`: the
+    absolute value shifted right by W * index bits, modulo 2^W. Its width must
+    equal the limb width W, which is the handle width from the data layout.
+    Every index at or beyond `rcgmp.limb_count` reads zero. The operand is
+    borrowed, as by `rcgmp.cmpi`.
+
+    ```mlir
+    %limb = rcgmp.limb %x[%i] : !rcgmp.mpz to i64
+    ```
+  }];
+  let arguments = (ins Arg<RCGMP_MpzType, "borrowed integer", [MemRead]>:$value,
+      Index:$index);
+  let results = (outs AnySignlessInteger:$result);
+  let assemblyFormat = [{
+    $value `[` $index `]` attr-dict `:` type($value) `to` type($result)
+  }];
+  let hasFolder = 1;
+  let hasVerifier = 1;
+}
+
 def RCGMP_MatchOp : RCGMPOp<"match", [RCGMP_NotSpeculatable,
     RecursiveMemoryEffects, SingleBlockImplicitTerminator<"YieldOp">,
     DeclareOpInterfaceMethods<RegionBranchOpInterface, ["getSuccessorInputs"]>]> {

@@ -1492,6 +1492,98 @@ struct TestBitILowering : FastPathLowering<TestBitILowering> {
   }
 };
 
+// Lowers rcgmp.limb_count inline. An immediate has one limb unless it is zero,
+// whose tagged bits are 1, and a heap integer has as many as its signed count
+// says.
+struct LimbCountLowering : OpRewritePattern<LimbCountOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(LimbCountOp op,
+                                PatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    Value integer = op.getValue();
+    unsigned width = DataLayout::closest(op)
+                         .getTypeSizeInBits(integer.getType())
+                         .getFixedValue();
+    auto word = rewriter.getIntegerType(width);
+    auto immediate = bridge::MpzIsImmediateOp::create(rewriter, loc, integer);
+    auto branch = scf::IfOp::create(rewriter, loc, TypeRange{word}, immediate,
+                                    /*withElseRegion=*/true);
+    rewriter.setInsertionPointToStart(&branch.getThenRegion().front());
+    Value bits = bridge::MpzToBitsOp::create(rewriter, loc, word, integer);
+    auto nonzero = arith::CmpIOp::create(
+        rewriter, loc, arith::CmpIPredicate::ne, bits,
+        arith::ConstantIntOp::create(rewriter, loc, word, 1));
+    scf::YieldOp::create(
+        rewriter, loc,
+        ValueRange{arith::ExtUIOp::create(rewriter, loc, word, nonzero)});
+    rewriter.setInsertionPointToStart(&branch.getElseRegion().front());
+    Value size = bridge::MpzSizeOp::create(rewriter, loc, word, integer);
+    scf::YieldOp::create(rewriter, loc,
+                         ValueRange{math::AbsIOp::create(rewriter, loc, size)});
+    rewriter.setInsertionPointAfter(branch);
+    rewriter.replaceOpWithNewOp<arith::IndexCastUIOp>(
+        op, rewriter.getIndexType(), branch.getResult(0));
+    return success();
+  }
+};
+
+// Lowers rcgmp.limb inline. An immediate's only limb is the absolute value of
+// its payload, and a heap integer loads the limb if its index lies below the
+// count. Every other limb is zero.
+struct LimbLowering : OpRewritePattern<LimbOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(LimbOp op,
+                                PatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    Value integer = op.getValue(), index = op.getIndex();
+    auto word = cast<IntegerType>(op.getType());
+    auto zero = [&]() -> Value {
+      return arith::ConstantIntOp::create(rewriter, loc, word, 0);
+    };
+    auto immediate = bridge::MpzIsImmediateOp::create(rewriter, loc, integer);
+    auto branch = scf::IfOp::create(rewriter, loc, TypeRange{word}, immediate,
+                                    /*withElseRegion=*/true);
+    rewriter.setInsertionPointToStart(&branch.getThenRegion().front());
+    // Untagging leaves a value above the signed word minimum, whose absolute
+    // value does not overflow.
+    Value bits = bridge::MpzToBitsOp::create(rewriter, loc, word, integer);
+    Value payload = arith::ShRSIOp::create(
+        rewriter, loc, bits,
+        arith::ConstantIntOp::create(rewriter, loc, word, 2));
+    auto first =
+        arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::eq, index,
+                              arith::ConstantIndexOp::create(rewriter, loc, 0));
+    scf::YieldOp::create(
+        rewriter, loc,
+        ValueRange{arith::SelectOp::create(
+            rewriter, loc, first, math::AbsIOp::create(rewriter, loc, payload),
+            zero())});
+    rewriter.setInsertionPointToStart(&branch.getElseRegion().front());
+    Value size = bridge::MpzSizeOp::create(rewriter, loc, word, integer);
+    Value count =
+        arith::IndexCastUIOp::create(rewriter, loc, rewriter.getIndexType(),
+                                     math::AbsIOp::create(rewriter, loc, size));
+    auto inside = arith::CmpIOp::create(
+        rewriter, loc, arith::CmpIPredicate::ult, index, count);
+    auto load = scf::IfOp::create(rewriter, loc, TypeRange{word}, inside,
+                                  /*withElseRegion=*/true);
+    {
+      OpBuilder::InsertionGuard guard(rewriter);
+      rewriter.setInsertionPointToStart(&load.getThenRegion().front());
+      scf::YieldOp::create(rewriter, loc,
+                           ValueRange{bridge::MpzLimbOp::create(
+                               rewriter, loc, word, integer, index)});
+      rewriter.setInsertionPointToStart(&load.getElseRegion().front());
+      scf::YieldOp::create(rewriter, loc, ValueRange{zero()});
+    }
+    scf::YieldOp::create(rewriter, loc, load.getResults());
+    rewriter.replaceOp(op, branch.getResults());
+    return success();
+  }
+};
+
 struct CmpILowering : FastPathLowering<CmpILowering> {
   using FastPathLowering::FastPathLowering;
   using Op = CmpIOp;
@@ -1658,7 +1750,8 @@ struct ConvertRCGMPToSCFPass
              FloorModSILowering, DivRemSILowering, FloorDivModSILowering,
              EDivSILowering, EModSILowering, EDivModSILowering, CmpILowering,
              TruncationLowering<TruncIOp>, TruncationLowering<TruncIOverflowOp>,
-             Log2ILowering, TestBitILowering>(&getContext());
+             Log2ILowering, TestBitILowering, LimbCountLowering, LimbLowering>(
+            &getContext());
     populateMatchLoweringPatterns(patterns);
     ConversionTarget target(getContext());
     target.addIllegalOp<
@@ -1667,7 +1760,7 @@ struct ConvertRCGMPToSCFPass
         ShLIOp, ShRSIOp, FloorMod2ExpIOp, IPowIOp, DivSIOp, RemSIOp,
         FloorDivSIOp, FloorModSIOp, DivRemSIOp, FloorDivModSIOp, EDivSIOp,
         EModSIOp, EDivModSIOp, CmpIOp, TruncIOp, TruncIOverflowOp, Log2IOp,
-        TestBitIOp, MatchOp, YieldOp>();
+        TestBitIOp, LimbCountOp, LimbOp, MatchOp, YieldOp>();
     target.markUnknownOpDynamicallyLegal([](Operation *) { return true; });
     if (failed(applyPartialConversion(getOperation(), target,
                                       std::move(patterns))))

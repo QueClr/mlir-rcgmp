@@ -82,6 +82,7 @@ std::int64_t log2i(void *);
 std::int64_t shifted_trunci_log2(void *);
 std::int32_t testbiti(void *, std::int64_t);
 std::int32_t shifted_testbit(void *, std::int64_t);
+std::int64_t limb_sum(void *);
 void *gcdi(void *, void *);
 void *euclid(void *, void *);
 void *divsi_exact(void *, void *);
@@ -1007,6 +1008,40 @@ void registerBits() {
   }
 }
 
+// Every limb of borrowed integers, and the same limbs read by GMP.
+void registerLimbs() {
+  for (auto [label, operand] : {
+           std::pair{"/immediate", RemainderOperand{smallLhs}},
+           {"/negative immediate", RemainderOperand{-smallLhs}},
+           {"/heap", RemainderOperand{0, lhsWords}},
+           {"/negative heap", RemainderOperand{0, lhsWords, true}},
+       }) {
+    benchmark::RegisterBenchmark(std::string("limb sum") + label,
+                                 [=](benchmark::State &state) {
+                                   void *x = operand.compiled();
+                                   for (auto _ : state) {
+                                     benchmark::DoNotOptimize(x);
+                                     benchmark::DoNotOptimize(limb_sum(x));
+                                   }
+                                   rcgmp_mpz_release(x, 0);
+                                 });
+    benchmark::RegisterBenchmark(
+        std::string("gmp limb sum") + label, [=](benchmark::State &state) {
+          mpz_t x;
+          mpz_init(x);
+          operand.gmp(x);
+          for (auto _ : state) {
+            benchmark::DoNotOptimize(x);
+            std::uint64_t sum = 0;
+            for (std::size_t i = 0, n = mpz_size(x); i < n; ++i)
+              sum += mpz_getlimbn(x, i);
+            benchmark::DoNotOptimize(sum);
+          }
+          mpz_clear(x);
+        });
+  }
+}
+
 void registerOthers() {
   static Integer smallX(smallLhs), smallY(smallRhs), heapX(lhsWords),
       heapY(rhsWords), five(5);
@@ -1284,7 +1319,7 @@ void registerExactDivisions() {
     (registerBinaries(), registerMonus(), registerUnaries(), registerShifts(),
      registerRemainders(), registerPowers(), registerDivisions(),
      registerEuclidean(), registerLean(), registerTruncations(),
-     registerLogarithms(), registerBits(), registerOthers(), registerGcd(),
-     registerExactDivisions(), 0);
+     registerLogarithms(), registerBits(), registerLimbs(), registerOthers(),
+     registerGcd(), registerExactDivisions(), 0);
 
 } // namespace
