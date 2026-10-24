@@ -11,6 +11,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <string>
 #include <utility>
 #include <vector>
 import rcgmp.testing;
@@ -147,54 +148,60 @@ void checkShifts(const Integer &x, unsigned amount) {
       << x << " >> " << amount;
 }
 
-// Every division, which is not folded by zero.
+// Every division in each mode. A zero divisor folds only in lean mode, where
+// the quotient is zero and the remainder x.
 void checkDivisions(const Integer &x, const Integer &y) {
-  Folder folder;
-  Integer tq, tr, fq, fr, eq, er;
+  using mlir::rcgmp::DivZero;
+  Integer tq, tr = x, fq, fr = x, eq, er = x;
   bool zero = !y.sign();
   if (!zero) {
     mpz_tdiv_qr(tq, tr, x, y);
     mpz_fdiv_qr(fq, fr, x, y);
     ::rcgmp::test::gmpEuclidean(eq, er, x, y);
   }
-  auto expect = [&](Value value, const Integer &expected, const char *name) {
-    std::optional<Integer> folded = mpzValue(value);
-    if (zero)
-      EXPECT_FALSE(folded) << name << " by zero was folded";
-    else
-      EXPECT_EQ(folded, expected) << name << " " << x << ", " << y;
-  };
-  Type type = folder.mpzType();
-  expect(
-      folder.fold<mlir::rcgmp::DivSIOp>(type, folder.mpz(x), folder.mpz(y))[0],
-      tq, "divsi");
-  expect(
-      folder.fold<mlir::rcgmp::RemSIOp>(type, folder.mpz(x), folder.mpz(y))[0],
-      tr, "remsi");
-  expect(folder.fold<mlir::rcgmp::FloorDivSIOp>(type, folder.mpz(x),
-                                                folder.mpz(y))[0],
-         fq, "floordivsi");
-  expect(folder.fold<mlir::rcgmp::FloorModSIOp>(type, folder.mpz(x),
-                                                folder.mpz(y))[0],
-         fr, "floormodsi");
-  auto both = folder.fold<mlir::rcgmp::DivRemSIOp>(type, type, folder.mpz(x),
-                                                   folder.mpz(y));
-  expect(both[0], tq, "divremsi quotient");
-  expect(both[1], tr, "divremsi remainder");
-  auto floored = folder.fold<mlir::rcgmp::FloorDivModSIOp>(
-      type, type, folder.mpz(x), folder.mpz(y));
-  expect(floored[0], fq, "floordivmodsi quotient");
-  expect(floored[1], fr, "floordivmodsi remainder");
-  expect(
-      folder.fold<mlir::rcgmp::EDivSIOp>(type, folder.mpz(x), folder.mpz(y))[0],
-      eq, "edivsi");
-  expect(
-      folder.fold<mlir::rcgmp::EModSIOp>(type, folder.mpz(x), folder.mpz(y))[0],
-      er, "emodsi");
-  auto euclidean = folder.fold<mlir::rcgmp::EDivModSIOp>(
-      type, type, folder.mpz(x), folder.mpz(y));
-  expect(euclidean[0], eq, "edivmodsi quotient");
-  expect(euclidean[1], er, "edivmodsi remainder");
+  for (DivZero mode : {DivZero::trap, DivZero::undefined, DivZero::lean}) {
+    Folder folder;
+    auto expect = [&](Value value, const Integer &expected, const char *name) {
+      std::optional<Integer> folded = mpzValue(value);
+      std::string operation =
+          std::string(name) + " " + mlir::rcgmp::stringifyDivZero(mode).str();
+      if (zero && mode != DivZero::lean)
+        EXPECT_FALSE(folded) << operation << " by zero was folded";
+      else
+        EXPECT_EQ(folded, expected) << operation << " " << x << ", " << y;
+    };
+    Type type = folder.mpzType();
+    expect(folder.fold<mlir::rcgmp::DivSIOp>(type, folder.mpz(x), folder.mpz(y),
+                                             mode)[0],
+           tq, "divsi");
+    expect(folder.fold<mlir::rcgmp::RemSIOp>(type, folder.mpz(x), folder.mpz(y),
+                                             mode)[0],
+           tr, "remsi");
+    expect(folder.fold<mlir::rcgmp::FloorDivSIOp>(type, folder.mpz(x),
+                                                  folder.mpz(y), mode)[0],
+           fq, "floordivsi");
+    expect(folder.fold<mlir::rcgmp::FloorModSIOp>(type, folder.mpz(x),
+                                                  folder.mpz(y), mode)[0],
+           fr, "floormodsi");
+    auto both = folder.fold<mlir::rcgmp::DivRemSIOp>(type, type, folder.mpz(x),
+                                                     folder.mpz(y), mode);
+    expect(both[0], tq, "divremsi quotient");
+    expect(both[1], tr, "divremsi remainder");
+    auto floored = folder.fold<mlir::rcgmp::FloorDivModSIOp>(
+        type, type, folder.mpz(x), folder.mpz(y), mode);
+    expect(floored[0], fq, "floordivmodsi quotient");
+    expect(floored[1], fr, "floordivmodsi remainder");
+    expect(folder.fold<mlir::rcgmp::EDivSIOp>(type, folder.mpz(x),
+                                              folder.mpz(y), mode)[0],
+           eq, "edivsi");
+    expect(folder.fold<mlir::rcgmp::EModSIOp>(type, folder.mpz(x),
+                                              folder.mpz(y), mode)[0],
+           er, "emodsi");
+    auto euclidean = folder.fold<mlir::rcgmp::EDivModSIOp>(
+        type, type, folder.mpz(x), folder.mpz(y), mode);
+    expect(euclidean[0], eq, "edivmodsi quotient");
+    expect(euclidean[1], er, "edivmodsi remainder");
+  }
 }
 
 void checkComparisons(const Integer &x, const Integer &y) {

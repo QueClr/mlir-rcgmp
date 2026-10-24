@@ -1,5 +1,8 @@
 // Compares compiled divisions and their runtime entry points with GMP, over
-// the ownership of their operands. Divisors are nonzero.
+// the ownership of their operands and the modes for a zero divisor. Only lean
+// divisions receive zero divisors, which give the quotient zero and the
+// remainder lhs; zero divisors of the others are tested to terminate in
+// division.cpp.
 #include "RCGMP/Runtime/Mpz.h"
 #include <fuzztest/fuzztest.h>
 #include <gmock/gmock.h>
@@ -33,6 +36,7 @@ using namespace rcgmp::test;
 // immortal heap operand has a zero reference count.
 struct DivisionCase {
   DivisionOperator op;
+  DivZero mode;
   Counting counting;
   Ownership ownership;
   bool aliased;
@@ -49,8 +53,8 @@ struct DivisionCase {
     std::string entry =
         reuse ? std::format(", runtime with reuse mask {}", *reuse) : "";
     return std::format(
-        "{} ({}{}{}{}{}{}{}): lhs = {}, rhs = {}", operation(op).name,
-        rcgmp::name(counting), aliased ? ", aliased" : "",
+        "{} {} ({}{}{}{}{}{}{}): lhs = {}, rhs = {}", operation(op).name,
+        name(mode), rcgmp::name(counting), aliased ? ", aliased" : "",
         sharing.lhs ? ", shared lhs" : "", sharing.rhs ? ", shared rhs" : "",
         immortal.lhs ? ", immortal lhs" : "",
         immortal.rhs ? ", immortal rhs" : "", entry,
@@ -90,17 +94,20 @@ void checkDivision(const DivisionCase &test) {
       (unique && !Handle(x).isImmediate() && !immortalX) |
       (unique && !Handle(y).isImmediate() && !immortalY) << 1;
   std::uint32_t reuse = test.reuse.value_or(3) & uniqueness;
-  Integer quotient, remainder;
-  op.oracle(quotient, remainder, lhs, rhs);
+  Integer quotient, remainder = lhs;
+  if (rhs.sign())
+    op.oracle(quotient, remainder, lhs, rhs);
+  std::size_t mode = std::to_underlying(test.mode);
+  bool lean = test.mode == DivZero::lean;
   void *q = nullptr, *r = nullptr;
   if (op.quotient && op.remainder) {
-    auto results = test.reuse ? op.runtimePair[index](x, y, reuse)
-                              : op.compiledPair[index](x, y);
+    auto results = test.reuse ? op.runtimePair[lean][index](x, y, reuse)
+                              : op.compiledPair[mode][index](x, y);
     q = results.quotient;
     r = results.remainder;
   } else {
-    void *result =
-        test.reuse ? op.runtime[index](x, y, reuse) : op.compiled[index](x, y);
+    void *result = test.reuse ? op.runtime[lean][index](x, y, reuse)
+                              : op.compiled[mode][index](x, y);
     (op.quotient ? q : r) = result;
   }
   if (q)
@@ -134,69 +141,80 @@ void checkDivision(const DivisionCase &test) {
 
 // Each ownership of distinct operands, and of aliased ones, whose division
 // needs a nonzero lhs.
-void checkOwnerships(DivisionOperator op, Counting counting, const Operand &lhs,
-                     const Operand &rhs,
+void checkOwnerships(DivisionOperator op, DivZero mode, Counting counting,
+                     const Operand &lhs, const Operand &rhs,
                      std::optional<std::uint32_t> reuse = std::nullopt) {
   for (const Ownership &ownership : ownerships)
-    checkDivision({op, counting, ownership, false, lhs, rhs, {}, {}, reuse});
+    checkDivision(
+        {op, mode, counting, ownership, false, lhs, rhs, {}, {}, reuse});
   if (lhs.value.sign())
     for (const Ownership &ownership : aliasOwnerships)
-      checkDivision({op, counting, ownership, true, lhs, lhs, {}, {}, reuse});
+      checkDivision(
+          {op, mode, counting, ownership, true, lhs, lhs, {}, {}, reuse});
 }
 
-// Operands with a zero divisor replaced by one.
+// Operands, of which half have a zero divisor.
 fuzztest::Domain<std::pair<Integer, Integer>> AnyDivisionOperands() {
-  return fuzztest::Map(
-      [](std::pair<Integer, Integer> operands) {
-        if (!operands.second.sign())
-          operands.second = Integer(1);
-        return operands;
-      },
-      AnyOperands());
+  return fuzztest::OneOf(AnyOperands(), fuzztest::Map(
+                                            [](const Integer &lhs) {
+                                              return std::pair{lhs, Integer(0)};
+                                            },
+                                            AnyInteger()));
 }
 
-void DivisionMatchesGmp(DivisionOperator op, Counting counting,
+// The divisor of a division in mode, where only lean divisions may divide by
+// zero: the others divide by one instead.
+Operand divisor(DivZero mode, const Integer &rhs, std::size_t spare) {
+  if (!rhs.sign() && mode != DivZero::lean)
+    return {Integer(1), spare};
+  return {rhs, spare};
+}
+
+void DivisionMatchesGmp(DivisionOperator op, DivZero mode, Counting counting,
                         const std::pair<Integer, Integer> &operands,
                         std::size_t lhsSpare, std::size_t rhsSpare) {
-  checkOwnerships(op, counting, {operands.first, lhsSpare},
-                  {operands.second, rhsSpare});
+  checkOwnerships(op, mode, counting, {operands.first, lhsSpare},
+                  divisor(mode, operands.second, rhsSpare));
 }
 FUZZ_TEST(Differential, DivisionMatchesGmp)
-    .WithDomains(AnyDivisionOperator(), AnyCounting(), AnyDivisionOperands(),
-                 AnySpare(), AnySpare());
+    .WithDomains(AnyDivisionOperator(), AnyDivZero(), AnyCounting(),
+                 AnyDivisionOperands(), AnySpare(), AnySpare());
 
 // Compiled code calls the runtime with unique heap operands in the reuse mask,
 // but the runtime also accepts any subset of them, and immediate operands.
-void DivisionRuntimeMatchesGmp(DivisionOperator op, Counting counting,
+void DivisionRuntimeMatchesGmp(DivisionOperator op, DivZero mode,
+                               Counting counting,
                                const std::pair<Integer, Integer> &operands,
                                std::size_t lhsSpare, std::size_t rhsSpare,
                                std::uint32_t reuse) {
-  checkOwnerships(op, counting, {operands.first, lhsSpare},
-                  {operands.second, rhsSpare}, reuse);
+  checkOwnerships(op, mode, counting, {operands.first, lhsSpare},
+                  divisor(mode, operands.second, rhsSpare), reuse);
 }
 FUZZ_TEST(Differential, DivisionRuntimeMatchesGmp)
-    .WithDomains(AnyDivisionOperator(), AnyCounting(), AnyDivisionOperands(),
-                 AnySpare(), AnySpare(),
+    .WithDomains(AnyDivisionOperator(), AnyDivZero(), AnyCounting(),
+                 AnyDivisionOperands(), AnySpare(), AnySpare(),
                  fuzztest::InRange<std::uint32_t>(0, 3));
 
-class DivisionTest
-    : public ::testing::TestWithParam<std::tuple<DivisionOperator, Counting>> {
+using DivisionParameter = std::tuple<DivisionOperator, DivZero, Counting>;
+
+class DivisionTest : public ::testing::TestWithParam<DivisionParameter> {
 protected:
   DivisionOperator op = std::get<DivisionOperator>(GetParam());
+  DivZero mode = std::get<DivZero>(GetParam());
   Counting counting = std::get<Counting>(GetParam());
 };
 
-std::string parameterName(
-    const ::testing::TestParamInfo<std::tuple<DivisionOperator, Counting>>
-        &info) {
-  auto [op, counting] = info.param;
-  return std::string(operation(op).name) + "_" +
-         std::string(rcgmp::name(counting));
+std::string
+parameterName(const ::testing::TestParamInfo<DivisionParameter> &info) {
+  auto [op, mode, counting] = info.param;
+  return std::format("{}_{}_{}", operation(op).name, name(mode),
+                     rcgmp::name(counting));
 }
 
 INSTANTIATE_TEST_SUITE_P(
     Divisions, DivisionTest,
     ::testing::Combine(::testing::ValuesIn(divisionOperators),
+                       ::testing::ValuesIn(divZeros),
                        ::testing::ValuesIn(countings)),
     parameterName);
 
@@ -204,15 +222,16 @@ TEST_P(DivisionTest, MatchesGmpOnBoundaries) {
   for (const auto &[lhs, rhs, reuse] : std::views::cartesian_product(
            boundaries(), boundaries(),
            std::array<std::optional<std::uint32_t>, 2>{std::nullopt, 3}))
-    if (rhs.sign())
-      checkOwnerships(op, counting, {lhs, 2}, {rhs, 2}, reuse);
+    if (rhs.sign() || mode == DivZero::lean)
+      checkOwnerships(op, mode, counting, {lhs, 2}, {rhs, 2}, reuse);
 }
 
 TEST_P(DivisionTest, MatchesGmpOnConstants) {
   for (std::size_t i = 0; i < constantValues.size(); ++i)
     for (std::size_t j = 0; j < constantValues.size(); ++j)
-      if (constantValue(j).sign())
+      if (constantValue(j).sign() || mode == DivZero::lean)
         checkDivision({op,
+                       mode,
                        counting,
                        ownerships[0],
                        false,

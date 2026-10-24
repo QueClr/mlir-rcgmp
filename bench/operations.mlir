@@ -254,6 +254,76 @@ func.func @composed_emodsi(%x: !rcgmp.mpz, %y: !rcgmp.mpz) -> !rcgmp.mpz {
   %r = rcgmp.floormodsi %x, %m : !rcgmp.mpz
   return %r : !rcgmp.mpz
 }
+// Lean division, next to the same result from a comparison and a division
+// whose zero divisor is undefined.
+func.func @divsi_lean(%x: !rcgmp.mpz, %y: !rcgmp.mpz) -> !rcgmp.mpz {
+  %r = rcgmp.divsi %x, %y divzero<lean> : !rcgmp.mpz
+  return %r : !rcgmp.mpz
+}
+func.func @guarded_divsi(%x: !rcgmp.mpz, %y: !rcgmp.mpz) -> !rcgmp.mpz {
+  %zero = rcgmp.constant 0 : !rcgmp.mpz
+  %by_zero = rcgmp.cmpi eq, %y, %zero : !rcgmp.mpz
+  %r = scf.if %by_zero -> !rcgmp.mpz {
+    rcgmp.release %y : !rcgmp.mpz
+    rcgmp.release %x : !rcgmp.mpz
+    %q = rcgmp.constant 0 : !rcgmp.mpz
+    scf.yield %q : !rcgmp.mpz
+  } else {
+    %d = rcgmp.divsi %x, %y divzero<undefined> : !rcgmp.mpz
+    scf.yield %d : !rcgmp.mpz
+  }
+  return %r : !rcgmp.mpz
+}
+func.func @remsi_lean(%x: !rcgmp.mpz, %y: !rcgmp.mpz) -> !rcgmp.mpz {
+  %r = rcgmp.remsi %x, %y divzero<lean> : !rcgmp.mpz
+  return %r : !rcgmp.mpz
+}
+func.func @guarded_remsi(%x: !rcgmp.mpz, %y: !rcgmp.mpz) -> !rcgmp.mpz {
+  %zero = rcgmp.constant 0 : !rcgmp.mpz
+  %by_zero = rcgmp.cmpi eq, %y, %zero : !rcgmp.mpz
+  %r = scf.if %by_zero -> !rcgmp.mpz {
+    rcgmp.release %y : !rcgmp.mpz
+    scf.yield %x : !rcgmp.mpz
+  } else {
+    %d = rcgmp.remsi %x, %y divzero<undefined> : !rcgmp.mpz
+    scf.yield %d : !rcgmp.mpz
+  }
+  return %r : !rcgmp.mpz
+}
+func.func @edivsi_lean(%x: !rcgmp.mpz, %y: !rcgmp.mpz) -> !rcgmp.mpz {
+  %r = rcgmp.edivsi %x, %y divzero<lean> : !rcgmp.mpz
+  return %r : !rcgmp.mpz
+}
+func.func @guarded_edivsi(%x: !rcgmp.mpz, %y: !rcgmp.mpz) -> !rcgmp.mpz {
+  %zero = rcgmp.constant 0 : !rcgmp.mpz
+  %by_zero = rcgmp.cmpi eq, %y, %zero : !rcgmp.mpz
+  %r = scf.if %by_zero -> !rcgmp.mpz {
+    rcgmp.release %y : !rcgmp.mpz
+    rcgmp.release %x : !rcgmp.mpz
+    %q = rcgmp.constant 0 : !rcgmp.mpz
+    scf.yield %q : !rcgmp.mpz
+  } else {
+    %d = rcgmp.edivsi %x, %y divzero<undefined> : !rcgmp.mpz
+    scf.yield %d : !rcgmp.mpz
+  }
+  return %r : !rcgmp.mpz
+}
+func.func @emodsi_lean(%x: !rcgmp.mpz, %y: !rcgmp.mpz) -> !rcgmp.mpz {
+  %r = rcgmp.emodsi %x, %y divzero<lean> : !rcgmp.mpz
+  return %r : !rcgmp.mpz
+}
+func.func @guarded_emodsi(%x: !rcgmp.mpz, %y: !rcgmp.mpz) -> !rcgmp.mpz {
+  %zero = rcgmp.constant 0 : !rcgmp.mpz
+  %by_zero = rcgmp.cmpi eq, %y, %zero : !rcgmp.mpz
+  %r = scf.if %by_zero -> !rcgmp.mpz {
+    rcgmp.release %y : !rcgmp.mpz
+    scf.yield %x : !rcgmp.mpz
+  } else {
+    %d = rcgmp.emodsi %x, %y divzero<undefined> : !rcgmp.mpz
+    scf.yield %d : !rcgmp.mpz
+  }
+  return %r : !rcgmp.mpz
+}
 func.func @divremsi(%x: !rcgmp.mpz, %y: !rcgmp.mpz) -> (!rcgmp.mpz, !rcgmp.mpz) {
   %q, %r = rcgmp.divremsi %x, %y : !rcgmp.mpz
   return %q, %r : !rcgmp.mpz, !rcgmp.mpz

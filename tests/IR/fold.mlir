@@ -97,6 +97,28 @@ func.func @euclidean() -> (!rcgmp.mpz, !rcgmp.mpz, !rcgmp.mpz, !rcgmp.mpz, !rcgm
   return %q, %r, %q2, %r2, %q3, %r3 : !rcgmp.mpz, !rcgmp.mpz, !rcgmp.mpz, !rcgmp.mpz, !rcgmp.mpz, !rcgmp.mpz
 }
 
+// A lean division by zero has the quotient zero and the remainder lhs. The
+// remainder takes over the reference to lhs; a quotient alone releases it.
+// CHECK-LABEL: func.func @lean
+// CHECK-DAG: %[[ZERO:.*]] = rcgmp.constant 0 : !rcgmp.mpz
+// CHECK-DAG: %[[M7:.*]] = rcgmp.constant -7 : !rcgmp.mpz
+// CHECK-NOT: divzero
+// CHECK: rcgmp.release %arg0 : !rcgmp.mpz
+// CHECK-NOT: divzero
+// CHECK-NOT: rcgmp.release
+// CHECK: return %[[ZERO]], %[[M7]], %[[ZERO]], %[[M7]], %[[ZERO]], %arg1, %[[ZERO]], %arg2
+func.func @lean(%x: !rcgmp.mpz, %y: !rcgmp.mpz, %z: !rcgmp.mpz) -> (!rcgmp.mpz, !rcgmp.mpz, !rcgmp.mpz, !rcgmp.mpz, !rcgmp.mpz, !rcgmp.mpz, !rcgmp.mpz, !rcgmp.mpz) {
+  %m7 = rcgmp.constant -7 : !rcgmp.mpz
+  %zero = rcgmp.constant 0 : !rcgmp.mpz
+  %q = rcgmp.floordivsi %m7, %zero divzero<lean> : !rcgmp.mpz
+  %r = rcgmp.emodsi %m7, %zero divzero<lean> : !rcgmp.mpz
+  %q2, %r2 = rcgmp.divremsi %m7, %zero divzero<lean> : !rcgmp.mpz
+  %xq = rcgmp.divsi %x, %zero divzero<lean> : !rcgmp.mpz
+  %yr = rcgmp.remsi %y, %zero divzero<lean> : !rcgmp.mpz
+  %zq, %zr = rcgmp.edivmodsi %z, %zero divzero<lean> : !rcgmp.mpz
+  return %q, %r, %q2, %r2, %xq, %yr, %zq, %zr : !rcgmp.mpz, !rcgmp.mpz, !rcgmp.mpz, !rcgmp.mpz, !rcgmp.mpz, !rcgmp.mpz, !rcgmp.mpz, !rcgmp.mpz
+}
+
 // Conversions in and out, and comparisons, fold to integer constants.
 // CHECK-LABEL: func.func @conversions
 // CHECK-DAG: %[[U:.*]] = rcgmp.constant 255 : !rcgmp.mpz
@@ -134,19 +156,21 @@ func.func @counting() {
 // that a flag makes poison; a result past 4096 bits; and non-constant operands.
 // CHECK-LABEL: func.func @unfolded
 // CHECK: rcgmp.divsi
-// CHECK: rcgmp.remsi {{.*}} assume_nonzero
+// CHECK: rcgmp.remsi %arg1, %{{[^ ]*}} : !rcgmp.mpz
+// CHECK: rcgmp.floordivsi %arg2, {{.*}} divzero<undefined>
 // CHECK: rcgmp.trunci {{.*}} overflow<nsw>
 // CHECK: rcgmp.shli
 // CHECK: rcgmp.addi %arg0
-func.func @unfolded(%x: !rcgmp.mpz) -> (!rcgmp.mpz, !rcgmp.mpz, i8, !rcgmp.mpz, !rcgmp.mpz) {
+func.func @unfolded(%x: !rcgmp.mpz, %y: !rcgmp.mpz, %z: !rcgmp.mpz) -> (!rcgmp.mpz, !rcgmp.mpz, !rcgmp.mpz, i8, !rcgmp.mpz, !rcgmp.mpz) {
   %six = rcgmp.constant 6 : !rcgmp.mpz
   %zero = rcgmp.constant 0 : !rcgmp.mpz
   %big = rcgmp.constant 300 : !rcgmp.mpz
   %far = arith.constant 5000 : i64
   %q = rcgmp.divsi %six, %zero : !rcgmp.mpz
-  %r = rcgmp.remsi %six, %zero assume_nonzero : !rcgmp.mpz
+  %r = rcgmp.remsi %y, %zero : !rcgmp.mpz
+  %fq = rcgmp.floordivsi %z, %zero divzero<undefined> : !rcgmp.mpz
   %t = rcgmp.trunci %big overflow<nsw> : !rcgmp.mpz to i8
   %l = rcgmp.shli %six, %far : !rcgmp.mpz, i64
   %s = rcgmp.addi %x, %six : !rcgmp.mpz
-  return %q, %r, %t, %l, %s : !rcgmp.mpz, !rcgmp.mpz, i8, !rcgmp.mpz, !rcgmp.mpz
+  return %q, %r, %fq, %t, %l, %s : !rcgmp.mpz, !rcgmp.mpz, !rcgmp.mpz, i8, !rcgmp.mpz, !rcgmp.mpz
 }

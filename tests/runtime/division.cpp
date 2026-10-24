@@ -19,7 +19,9 @@ import rcgmp.testing.allocator;
 extern "C" {
 #define RCGMP_ENTRY(result, name)                                              \
   result name##_local(void *, void *);                                         \
-  result name##_atomic(void *, void *);
+  result name##_atomic(void *, void *);                                        \
+  result name##_lean_local(void *, void *);                                    \
+  result name##_lean_atomic(void *, void *);
 RCGMP_ENTRY(void *, divsi)
 RCGMP_ENTRY(void *, remsi)
 RCGMP_ENTRY(void *, floordivsi)
@@ -30,7 +32,7 @@ RCGMP_ENTRY(void *, edivsi)
 RCGMP_ENTRY(void *, emodsi)
 RCGMP_ENTRY(rcgmp_mpz_qr, edivmodsi)
 #undef RCGMP_ENTRY
-void *divsi_assume(void *, void *);
+void *divsi_undefined(void *, void *);
 rcgmp_mpz_qr edivmodsi_by_8(void *);
 rcgmp_mpz_qr edivmodsi_by_minus_8(void *);
 }
@@ -45,41 +47,58 @@ constexpr unsigned word = GMP_NUMB_BITS;
 
 using GmpDivision = void (*)(mpz_ptr, mpz_ptr, mpz_srcptr, mpz_srcptr);
 
-struct Rounding {
-  std::string_view name;
-  // Indexed by counting.
+// The compiled divisions of a rounding, indexed by counting.
+struct Divisions {
   std::array<void *(*)(void *, void *), 2> quotient, remainder;
   std::array<rcgmp_mpz_qr (*)(void *, void *), 2> both;
+};
+
+struct Rounding {
+  std::string_view name;
+  Divisions trap, lean;
   GmpDivision oracle;
 };
 
 constexpr std::array<Rounding, 3> roundings{{
     {"truncate",
-     {divsi_local, divsi_atomic},
-     {remsi_local, remsi_atomic},
-     {divremsi_local, divremsi_atomic},
+     {{divsi_local, divsi_atomic},
+      {remsi_local, remsi_atomic},
+      {divremsi_local, divremsi_atomic}},
+     {{divsi_lean_local, divsi_lean_atomic},
+      {remsi_lean_local, remsi_lean_atomic},
+      {divremsi_lean_local, divremsi_lean_atomic}},
      mpz_tdiv_qr},
     {"floor",
-     {floordivsi_local, floordivsi_atomic},
-     {floormodsi_local, floormodsi_atomic},
-     {floordivmodsi_local, floordivmodsi_atomic},
+     {{floordivsi_local, floordivsi_atomic},
+      {floormodsi_local, floormodsi_atomic},
+      {floordivmodsi_local, floordivmodsi_atomic}},
+     {{floordivsi_lean_local, floordivsi_lean_atomic},
+      {floormodsi_lean_local, floormodsi_lean_atomic},
+      {floordivmodsi_lean_local, floordivmodsi_lean_atomic}},
      mpz_fdiv_qr},
     {"euclidean",
-     {edivsi_local, edivsi_atomic},
-     {emodsi_local, emodsi_atomic},
-     {edivmodsi_local, edivmodsi_atomic},
+     {{edivsi_local, edivsi_atomic},
+      {emodsi_local, emodsi_atomic},
+      {edivmodsi_local, edivmodsi_atomic}},
+     {{edivsi_lean_local, edivsi_lean_atomic},
+      {emodsi_lean_local, emodsi_lean_atomic},
+      {edivmodsi_lean_local, edivmodsi_lean_atomic}},
      gmpEuclidean},
 }};
 
 // Applies each compiled division of a rounding to lhs and rhs, the lhs shared
 // if the caller keeps an extra reference, and compares the results with GMP.
+// A lean division by zero gives the quotient zero and the remainder lhs.
 void checkDivision(const Rounding &rounding, const Integer &lhs,
-                   const Integer &rhs, Counting counting, bool shared) {
-  SCOPED_TRACE(std::string(rounding.name) + ": " + lhs.hex() + " / " +
-               rhs.hex() + (shared ? " (shared)" : ""));
+                   const Integer &rhs, Counting counting, bool shared,
+                   bool lean = false) {
+  SCOPED_TRACE(std::string(rounding.name) + (lean ? " lean" : "") + ": " +
+               lhs.hex() + " / " + rhs.hex() + (shared ? " (shared)" : ""));
   bool atomic = counting == Counting::atomic;
-  Integer quotient, remainder;
-  rounding.oracle(quotient, remainder, lhs, rhs);
+  const Divisions &divisions = lean ? rounding.lean : rounding.trap;
+  Integer quotient, remainder = lhs;
+  if (rhs.sign())
+    rounding.oracle(quotient, remainder, lhs, rhs);
   auto apply = [&](auto divide) {
     void *x = toRuntime(lhs);
     if (shared)
@@ -91,13 +110,13 @@ void checkDivision(const Rounding &rounding, const Integer &lhs,
     }
     return result;
   };
-  void *q = apply(rounding.quotient[atomic]);
+  void *q = apply(divisions.quotient[atomic]);
   EXPECT_THAT(q, Represents(quotient));
   rcgmp_mpz_release(q, atomic);
-  void *r = apply(rounding.remainder[atomic]);
+  void *r = apply(divisions.remainder[atomic]);
   EXPECT_THAT(r, Represents(remainder));
   rcgmp_mpz_release(r, atomic);
-  auto [bothQ, bothR] = apply(rounding.both[atomic]);
+  auto [bothQ, bothR] = apply(divisions.both[atomic]);
   EXPECT_THAT(bothQ, Represents(quotient));
   EXPECT_THAT(bothR, Represents(remainder));
   rcgmp_mpz_release(bothQ, atomic);
@@ -143,13 +162,65 @@ std::vector<Integer> boundaryValues() {
 }
 
 // Dividends shorter than, as long as, and longer than divisors of one or more
-// limbs, with exact and inexact quotients.
+// limbs, with exact and inexact quotients, and lean divisions by zero.
 TEST_P(DivisionTest, MatchesGmpOnBoundaries) {
   std::vector<Integer> values = boundaryValues();
-  for (const auto &[lhs, rhs, shared] :
-       std::views::cartesian_product(values, values, std::array{false, true}))
-    if (rhs.sign())
-      checkDivision(rounding, lhs, rhs, counting, shared);
+  for (const auto &[lhs, rhs, shared, lean] : std::views::cartesian_product(
+           values, values, std::array{false, true}, std::array{false, true}))
+    if (rhs.sign() || lean)
+      checkDivision(rounding, lhs, rhs, counting, shared, lean);
+}
+
+// A lean remainder by zero takes over the reference to lhs, and a lean
+// quotient alone releases it.
+TEST_P(DivisionTest, LeanDivisionByZeroOwnsDividend) {
+  void *zero = Handle::immediate(0).pointer();
+  Integer heap = Integer::powerOfTwo(2 * word) + 3;
+  std::array values{Integer(0),  Integer(5),
+                    Integer(-5), Integer(Handle::immediateMin),
+                    heap,        -heap};
+  for (const auto &[lhs, shared] :
+       std::views::cartesian_product(values, std::array{false, true})) {
+    SCOPED_TRACE(std::string(rounding.name) + ": " + lhs.hex() +
+                 (shared ? " (shared)" : ""));
+    bool counted = !lhs.fitsImmediate();
+    // Calls divide with lhs and a zero divisor, and returns lhs, which the
+    // caller still owns if it is shared, and how many objects were freed.
+    auto apply = [&](auto divide) {
+      void *x = toRuntime(lhs);
+      if (shared)
+        rcgmp_mpz_retain(x, atomic);
+      AllocationCounter counter;
+      auto result = divide(x, zero);
+      return std::tuple{x, result, counter.deallocations()};
+    };
+    auto releaseShared = [&](void *x, unsigned count) {
+      if (!shared)
+        return;
+      EXPECT_THAT(x, Represents(lhs));
+      if (counted)
+        EXPECT_EQ(references(x, counting), count);
+      rcgmp_mpz_release(x, atomic);
+    };
+
+    auto [x, q, freed] = apply(rounding.lean.quotient[atomic]);
+    EXPECT_THAT(q, Represents(Integer(0)));
+    EXPECT_EQ(freed, counted && !shared);
+    releaseShared(x, 1);
+
+    auto [y, r, kept] = apply(rounding.lean.remainder[atomic]);
+    EXPECT_EQ(r, y);
+    EXPECT_EQ(kept, 0u);
+    releaseShared(y, 2);
+    rcgmp_mpz_release(r, atomic);
+
+    auto [z, both, none] = apply(rounding.lean.both[atomic]);
+    EXPECT_THAT(both.quotient, Represents(Integer(0)));
+    EXPECT_EQ(both.remainder, z);
+    EXPECT_EQ(none, 0u);
+    releaseShared(z, 2);
+    rcgmp_mpz_release(both.remainder, atomic);
+  }
 }
 
 // Only the quotient of the immediate minimum by -1 leaves the immediate range.
@@ -176,8 +247,9 @@ TEST_P(DivisionTest, ReusesUniqueDividend) {
        {std::pair{Integer::powerOfTwo(word + 1) + 3, false},
         {Integer(7), true}}) {
     void *x = toRuntime(lhs);
-    void *result = (quotient ? rounding.quotient : rounding.remainder)[atomic](
-        x, toRuntime(divisor));
+    void *result =
+        (quotient ? rounding.trap.quotient
+                  : rounding.trap.remainder)[atomic](x, toRuntime(divisor));
     EXPECT_EQ(result, x);
     Integer q, r;
     rounding.oracle(q, r, lhs, divisor);
@@ -194,8 +266,8 @@ TEST(DivisionDeathTest, TerminatesOnZeroDivisor) {
   EXPECT_DEATH(divremsi_local(Handle::immediate(-5).pointer(), zero), "");
   EXPECT_DEATH(rcgmp_mpz_fdiv_r(Handle::immediate(5).pointer(), zero, 0), "");
   EXPECT_DEATH(edivmodsi_atomic(Handle::immediate(-5).pointer(), zero), "");
-  // The runtime still checks a divisor assumed nonzero.
-  EXPECT_DEATH(divsi_assume(toRuntime(Integer::powerOfTwo(2 * word)), zero),
+  // The runtime still terminates on a zero divisor whose division is undefined.
+  EXPECT_DEATH(divsi_undefined(toRuntime(Integer::powerOfTwo(2 * word)), zero),
                "");
 }
 
@@ -215,9 +287,9 @@ TEST(Division, DividesByConstantPowersOfTwo) {
     }
 }
 
-TEST(Division, AssumesNonzeroDivisor) {
-  void *result = divsi_assume(Handle::immediate(-7).pointer(),
-                              Handle::immediate(2).pointer());
+TEST(Division, DividesWithUndefinedZeroDivisor) {
+  void *result = divsi_undefined(Handle::immediate(-7).pointer(),
+                                 Handle::immediate(2).pointer());
   EXPECT_THAT(result, Represents(Integer(-3)));
 }
 

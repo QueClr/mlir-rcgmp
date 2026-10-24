@@ -21,6 +21,10 @@ def RCGMP_ArmAttr : AttrDef<RCGMPDialect, "Arm"> {
   let genVerifyDecl = 1;
 }
 
+def RCGMP_DivZeroAttr : EnumAttr<RCGMPDialect, RCGMP_DivZero, "divzero"> {
+  let assemblyFormat = "`<` $value `>`";
+}
+
 def RCGMP_MpzValueAttr : AttrDef<RCGMPDialect, "MpzValue"> {
   let mnemonic = "value";
   let summary = "The value of a constant integer, as folding represents it";

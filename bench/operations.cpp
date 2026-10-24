@@ -48,6 +48,14 @@ void *edivsi(void *, void *);
 void *emodsi(void *, void *);
 void *composed_edivsi(void *, void *);
 void *composed_emodsi(void *, void *);
+void *divsi_lean(void *, void *);
+void *guarded_divsi(void *, void *);
+void *remsi_lean(void *, void *);
+void *guarded_remsi(void *, void *);
+void *edivsi_lean(void *, void *);
+void *guarded_edivsi(void *, void *);
+void *emodsi_lean(void *, void *);
+void *guarded_emodsi(void *, void *);
 rcgmp_mpz_qr divremsi(void *, void *);
 std::int64_t trunci(void *);
 std::int64_t trunci_overflow(void *);
@@ -576,6 +584,51 @@ void registerEuclidean() {
                                    lhs->value, rhs->value);
 }
 
+// Lean division, the same result from a comparison and a division whose zero
+// divisor is undefined, and trapping division, which terminates on a zero
+// divisor and so has no rows for one.
+void registerLean() {
+  Counted counted = countings[0];
+  using Operands = std::pair<void *, void *> (*)();
+  const std::array<std::tuple<const char *, Operands, bool>, 5> cases{{
+      {"/immediates",
+       [] { return std::pair{immediate(smallLhs), immediate(-smallRhs)}; },
+       false},
+      {"/immediates, zero",
+       [] { return std::pair{immediate(smallLhs), immediate(0)}; }, true},
+      {"/shared heap, immediate",
+       [] { return std::pair{heap(lhsWords), immediate(-smallRhs)}; }, false},
+      {"/shared heap, zero",
+       [] { return std::pair{heap(lhsWords), immediate(0)}; }, true},
+      {"/shared heaps",
+       [] {
+         return std::pair{heap(lhsWords), rcgmp_mpz_neg(heap(rhsWords), 0)};
+       },
+       false},
+  }};
+  struct LeanCase {
+    const char *name;
+    Binary trap, lean, guarded;
+  };
+  for (auto [name, trap, lean, guarded] :
+       {LeanCase{"divsi", divsi, divsi_lean, guarded_divsi},
+        {"remsi", remsi, remsi_lean, guarded_remsi},
+        {"edivsi", edivsi, edivsi_lean, guarded_edivsi},
+        {"emodsi", emodsi, emodsi_lean, guarded_emodsi}})
+    for (auto [label, operands, zero] : cases)
+      for (auto [mode, op] :
+           {std::pair{" trap", trap}, {" lean", lean}, {" guarded", guarded}}) {
+        if (zero && op == trap)
+          continue;
+        counted.binary = op;
+        benchmark::RegisterBenchmark(std::string(name) + mode + label,
+                                     [=](benchmark::State &state) {
+                                       auto [x, y] = operands();
+                                       binaryShared(state, counted, x, y);
+                                     });
+      }
+}
+
 // Truncations to i64 of borrowed integers, and GMP reading the low word with
 // and without a range check.
 void registerTruncations() {
@@ -726,7 +779,7 @@ void registerOthers() {
 
 [[maybe_unused]] const int registered =
     (registerBinaries(), registerMonus(), registerUnaries(), registerShifts(),
-     registerDivisions(), registerEuclidean(), registerTruncations(),
-     registerOthers(), 0);
+     registerDivisions(), registerEuclidean(), registerLean(),
+     registerTruncations(), registerOthers(), 0);
 
 } // namespace

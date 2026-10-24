@@ -192,6 +192,24 @@ Division divide(Handle lhs, Handle rhs, Reuse reuse) {
   return result;
 }
 
+// Divides as divide does, except that a zero divisor gives the quotient zero
+// and the remainder lhs, as the integer division of Lean does.
+template <Counting counting, Rounding rounding, bool wantQuotient,
+          bool wantRemainder>
+Division divideLean(Handle lhs, Handle rhs, Reuse reuse) {
+  if (rhs != Handle::immediate(0))
+    return divide<counting, rounding, wantQuotient, wantRemainder>(lhs, rhs,
+                                                                   reuse);
+  // The remainder takes over the reference to lhs. Zero is immediate, so the
+  // divisor needs no release.
+  Division result;
+  if (wantRemainder)
+    result.remainder = lhs;
+  else
+    release<counting>(lhs);
+  return result;
+}
+
 // Adapts a division with one result to the runtime ABI.
 template <auto divide, Handle Division::*result>
 void *divisionEntryPoint(void *lhs, void *rhs, std::uint32_t reuse) {
@@ -210,7 +228,7 @@ rcgmp_mpz_qr divisionPairEntryPoint(void *lhs, void *rhs, std::uint32_t reuse) {
 
 extern "C" {
 
-#define RCGMP_DIVISION(name, rounding, quotient, remainder, member)            \
+#define RCGMP_DIVISION(name, divide, rounding, quotient, remainder, member)    \
   void *rcgmp_mpz_##name(void *lhs, void *rhs, std::uint32_t reuse) {          \
     return rcgmp::divisionEntryPoint<                                          \
         rcgmp::divide<rcgmp::Counting::nonatomic, rounding, quotient,          \
@@ -222,50 +240,46 @@ extern "C" {
         rcgmp::divide<rcgmp::Counting::atomic, rounding, quotient, remainder>, \
         &rcgmp::Division::member>(lhs, rhs, reuse);                            \
   }
-RCGMP_DIVISION(tdiv_q, rcgmp::Rounding::truncate, true, false, quotient)
-RCGMP_DIVISION(tdiv_r, rcgmp::Rounding::truncate, false, true, remainder)
-RCGMP_DIVISION(fdiv_q, rcgmp::Rounding::floor, true, false, quotient)
-RCGMP_DIVISION(fdiv_r, rcgmp::Rounding::floor, false, true, remainder)
-RCGMP_DIVISION(ediv_q, rcgmp::Rounding::euclidean, true, false, quotient)
-RCGMP_DIVISION(ediv_r, rcgmp::Rounding::euclidean, false, true, remainder)
+RCGMP_DIVISION(tdiv_q, divide, rcgmp::Rounding::truncate, true, false, quotient)
+RCGMP_DIVISION(tdiv_r, divide, rcgmp::Rounding::truncate, false, true,
+               remainder)
+RCGMP_DIVISION(fdiv_q, divide, rcgmp::Rounding::floor, true, false, quotient)
+RCGMP_DIVISION(fdiv_r, divide, rcgmp::Rounding::floor, false, true, remainder)
+RCGMP_DIVISION(ediv_q, divide, rcgmp::Rounding::euclidean, true, false,
+               quotient)
+RCGMP_DIVISION(ediv_r, divide, rcgmp::Rounding::euclidean, false, true,
+               remainder)
+RCGMP_DIVISION(tdiv_q_lean, divideLean, rcgmp::Rounding::truncate, true, false,
+               quotient)
+RCGMP_DIVISION(tdiv_r_lean, divideLean, rcgmp::Rounding::truncate, false, true,
+               remainder)
+RCGMP_DIVISION(fdiv_q_lean, divideLean, rcgmp::Rounding::floor, true, false,
+               quotient)
+RCGMP_DIVISION(fdiv_r_lean, divideLean, rcgmp::Rounding::floor, false, true,
+               remainder)
+RCGMP_DIVISION(ediv_q_lean, divideLean, rcgmp::Rounding::euclidean, true, false,
+               quotient)
+RCGMP_DIVISION(ediv_r_lean, divideLean, rcgmp::Rounding::euclidean, false, true,
+               remainder)
 #undef RCGMP_DIVISION
 
-rcgmp_mpz_qr rcgmp_mpz_tdiv_qr(void *lhs, void *rhs, std::uint32_t reuse) {
-  return rcgmp::divisionPairEntryPoint<rcgmp::divide<
-      rcgmp::Counting::nonatomic, rcgmp::Rounding::truncate, true, true>>(
-      lhs, rhs, reuse);
-}
-
-rcgmp_mpz_qr rcgmp_mpz_tdiv_qr_atomic(void *lhs, void *rhs,
-                                      std::uint32_t reuse) {
-  return rcgmp::divisionPairEntryPoint<rcgmp::divide<
-      rcgmp::Counting::atomic, rcgmp::Rounding::truncate, true, true>>(lhs, rhs,
-                                                                       reuse);
-}
-
-rcgmp_mpz_qr rcgmp_mpz_fdiv_qr(void *lhs, void *rhs, std::uint32_t reuse) {
-  return rcgmp::divisionPairEntryPoint<rcgmp::divide<
-      rcgmp::Counting::nonatomic, rcgmp::Rounding::floor, true, true>>(lhs, rhs,
-                                                                       reuse);
-}
-
-rcgmp_mpz_qr rcgmp_mpz_fdiv_qr_atomic(void *lhs, void *rhs,
-                                      std::uint32_t reuse) {
-  return rcgmp::divisionPairEntryPoint<rcgmp::divide<
-      rcgmp::Counting::atomic, rcgmp::Rounding::floor, true, true>>(lhs, rhs,
-                                                                    reuse);
-}
-
-rcgmp_mpz_qr rcgmp_mpz_ediv_qr(void *lhs, void *rhs, std::uint32_t reuse) {
-  return rcgmp::divisionPairEntryPoint<rcgmp::divide<
-      rcgmp::Counting::nonatomic, rcgmp::Rounding::euclidean, true, true>>(
-      lhs, rhs, reuse);
-}
-
-rcgmp_mpz_qr rcgmp_mpz_ediv_qr_atomic(void *lhs, void *rhs,
-                                      std::uint32_t reuse) {
-  return rcgmp::divisionPairEntryPoint<rcgmp::divide<
-      rcgmp::Counting::atomic, rcgmp::Rounding::euclidean, true, true>>(
-      lhs, rhs, reuse);
-}
+#define RCGMP_DIVISION_PAIR(name, divide, rounding)                            \
+  rcgmp_mpz_qr rcgmp_mpz_##name(void *lhs, void *rhs, std::uint32_t reuse) {   \
+    return rcgmp::divisionPairEntryPoint<                                      \
+        rcgmp::divide<rcgmp::Counting::nonatomic, rounding, true, true>>(      \
+        lhs, rhs, reuse);                                                      \
+  }                                                                            \
+  rcgmp_mpz_qr rcgmp_mpz_##name##_atomic(void *lhs, void *rhs,                 \
+                                         std::uint32_t reuse) {                \
+    return rcgmp::divisionPairEntryPoint<                                      \
+        rcgmp::divide<rcgmp::Counting::atomic, rounding, true, true>>(         \
+        lhs, rhs, reuse);                                                      \
+  }
+RCGMP_DIVISION_PAIR(tdiv_qr, divide, rcgmp::Rounding::truncate)
+RCGMP_DIVISION_PAIR(fdiv_qr, divide, rcgmp::Rounding::floor)
+RCGMP_DIVISION_PAIR(ediv_qr, divide, rcgmp::Rounding::euclidean)
+RCGMP_DIVISION_PAIR(tdiv_qr_lean, divideLean, rcgmp::Rounding::truncate)
+RCGMP_DIVISION_PAIR(fdiv_qr_lean, divideLean, rcgmp::Rounding::floor)
+RCGMP_DIVISION_PAIR(ediv_qr_lean, divideLean, rcgmp::Rounding::euclidean)
+#undef RCGMP_DIVISION_PAIR
 }

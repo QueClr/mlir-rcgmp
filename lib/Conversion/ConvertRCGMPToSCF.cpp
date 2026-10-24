@@ -472,8 +472,20 @@ template <typename Derived, Rounding rounding, bool quotient, bool remainder>
 struct DivisionLowering : FastPathLowering<Derived> {
   using FastPathLowering<Derived>::FastPathLowering;
 
+  static DivZero getDivZero(Operation *op) {
+    return cast<typename Derived::Op>(op).getDivZero();
+  }
+
+  // Undefined division by zero calls the trapping functions, which may still
+  // terminate on it.
+  static StringRef getRuntimeSymbol(Operation *op, bool atomic) {
+    return getDivZero(op) == DivZero::lean ? Derived::getLeanRuntimeName(atomic)
+                                           : Derived::getRuntimeName(atomic);
+  }
+
   static FastPath buildFastPath(PatternRewriter &rewriter, Location loc,
                                 Operation *op, ValueRange operands) {
+    DivZero divZero = getDivZero(op);
     Value lhs = operands[0], rhs = operands[1];
     auto type = cast<IntegerType>(lhs.getType());
     auto constant = [&](int64_t value) -> Value {
@@ -496,13 +508,29 @@ struct DivisionLowering : FastPathLowering<Derived> {
     Value valid =
         FastPathLowering<Derived>::allImmediate(rewriter, loc, {lhs, rhs});
     // Dividing by zero is undefined even where the fast path is not taken, so
-    // a zero divisor is replaced unless the operation assumes it nonzero.
-    if (!cast<typename Derived::Op>(op).getAssumeNonzero()) {
-      Value nonzero = arith::CmpIOp::create(rewriter, loc,
-                                            arith::CmpIPredicate::ne, y, zero);
+    // a zero divisor is replaced unless it is undefined anyway. A trapping
+    // division replaces it by one and leaves zero to the runtime.
+    Value nonzero;
+    if (divZero != DivZero::undefined)
+      nonzero = arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::ne,
+                                      y, zero);
+    if (divZero == DivZero::trap) {
       y = arith::SelectOp::create(rewriter, loc, nonzero, y, constant(1));
       valid = arith::AndIOp::create(rewriter, loc, valid, nonzero);
     }
+    // A lean division replaces a zero divisor of the word division alone by
+    // the signed word minimum. Its magnitude exceeds those of untagged
+    // immediates, so the truncated quotient is zero and the remainder x, as
+    // lean requires. The rounding adjustments still see the zero divisor.
+    auto wordDivisor = [&](Value value) -> Value {
+      if (divZero != DivZero::lean)
+        return value;
+      auto minimum = arith::ConstantOp::create(
+          rewriter, loc,
+          rewriter.getIntegerAttr(type,
+                                  APInt::getSignedMinValue(type.getWidth())));
+      return arith::SelectOp::create(rewriter, loc, nonzero, value, minimum);
+    };
     Value q, r;
     if (mode == Rounding::euclidean) {
       // Unsigned division is faster than signed division. It divides x, or
@@ -517,8 +545,11 @@ struct DivisionLowering : FastPathLowering<Derived> {
       Value a = arith::XOrIOp::create(rewriter, loc, x, xSign);
       Value b = arith::SubIOp::create(
           rewriter, loc, arith::XOrIOp::create(rewriter, loc, y, ySign), ySign);
-      q = arith::DivUIOp::create(rewriter, loc, a, b);
-      r = arith::RemUIOp::create(rewriter, loc, a, b);
+      // The minimum, read unsigned, also exceeds a, and a zero b leaves the
+      // remainder x.
+      Value d = wordDivisor(b);
+      q = arith::DivUIOp::create(rewriter, loc, a, d);
+      r = arith::RemUIOp::create(rewriter, loc, a, d);
       q = arith::SubIOp::create(
           rewriter, loc,
           arith::XOrIOp::create(
@@ -529,8 +560,9 @@ struct DivisionLowering : FastPathLowering<Derived> {
                                 arith::XOrIOp::create(rewriter, loc, r, xSign),
                                 arith::AndIOp::create(rewriter, loc, b, xSign));
     } else {
-      q = arith::DivSIOp::create(rewriter, loc, x, y);
-      r = arith::RemSIOp::create(rewriter, loc, x, y);
+      Value d = wordDivisor(y);
+      q = arith::DivSIOp::create(rewriter, loc, x, d);
+      r = arith::RemSIOp::create(rewriter, loc, x, d);
     }
     if (mode == Rounding::floor) {
       // A nonzero remainder whose sign differs from the divisor's moves the
@@ -548,6 +580,9 @@ struct DivisionLowering : FastPathLowering<Derived> {
           rewriter, loc, r,
           arith::SelectOp::create(rewriter, loc, adjust, y, zero));
     }
+    // Rounding a negative x moves its quotient by zero away from zero.
+    if (divZero == DivZero::lean && mode != Rounding::truncate)
+      q = arith::SelectOp::create(rewriter, loc, nonzero, q, zero);
     auto tag = [&](Value value) -> Value {
       auto scaled = arith::ShLIOp::create(rewriter, loc, value, two);
       return arith::OrIOp::create(rewriter, loc, scaled, constant(1));
@@ -585,6 +620,10 @@ struct DivSILowering
   static StringRef getRuntimeName(bool atomic) {
     return atomic ? "rcgmp_mpz_tdiv_q_atomic" : "rcgmp_mpz_tdiv_q";
   }
+
+  static StringRef getLeanRuntimeName(bool atomic) {
+    return atomic ? "rcgmp_mpz_tdiv_q_lean_atomic" : "rcgmp_mpz_tdiv_q_lean";
+  }
 };
 
 struct RemSILowering
@@ -594,6 +633,10 @@ struct RemSILowering
 
   static StringRef getRuntimeName(bool atomic) {
     return atomic ? "rcgmp_mpz_tdiv_r_atomic" : "rcgmp_mpz_tdiv_r";
+  }
+
+  static StringRef getLeanRuntimeName(bool atomic) {
+    return atomic ? "rcgmp_mpz_tdiv_r_lean_atomic" : "rcgmp_mpz_tdiv_r_lean";
   }
 };
 
@@ -605,6 +648,10 @@ struct FloorDivSILowering
   static StringRef getRuntimeName(bool atomic) {
     return atomic ? "rcgmp_mpz_fdiv_q_atomic" : "rcgmp_mpz_fdiv_q";
   }
+
+  static StringRef getLeanRuntimeName(bool atomic) {
+    return atomic ? "rcgmp_mpz_fdiv_q_lean_atomic" : "rcgmp_mpz_fdiv_q_lean";
+  }
 };
 
 struct FloorModSILowering
@@ -614,6 +661,10 @@ struct FloorModSILowering
 
   static StringRef getRuntimeName(bool atomic) {
     return atomic ? "rcgmp_mpz_fdiv_r_atomic" : "rcgmp_mpz_fdiv_r";
+  }
+
+  static StringRef getLeanRuntimeName(bool atomic) {
+    return atomic ? "rcgmp_mpz_fdiv_r_lean_atomic" : "rcgmp_mpz_fdiv_r_lean";
   }
 };
 
@@ -625,6 +676,10 @@ struct DivRemSILowering
   static StringRef getRuntimeName(bool atomic) {
     return atomic ? "rcgmp_mpz_tdiv_qr_atomic" : "rcgmp_mpz_tdiv_qr";
   }
+
+  static StringRef getLeanRuntimeName(bool atomic) {
+    return atomic ? "rcgmp_mpz_tdiv_qr_lean_atomic" : "rcgmp_mpz_tdiv_qr_lean";
+  }
 };
 
 struct FloorDivModSILowering
@@ -634,6 +689,10 @@ struct FloorDivModSILowering
 
   static StringRef getRuntimeName(bool atomic) {
     return atomic ? "rcgmp_mpz_fdiv_qr_atomic" : "rcgmp_mpz_fdiv_qr";
+  }
+
+  static StringRef getLeanRuntimeName(bool atomic) {
+    return atomic ? "rcgmp_mpz_fdiv_qr_lean_atomic" : "rcgmp_mpz_fdiv_qr_lean";
   }
 };
 
@@ -645,6 +704,10 @@ struct EDivSILowering
   static StringRef getRuntimeName(bool atomic) {
     return atomic ? "rcgmp_mpz_ediv_q_atomic" : "rcgmp_mpz_ediv_q";
   }
+
+  static StringRef getLeanRuntimeName(bool atomic) {
+    return atomic ? "rcgmp_mpz_ediv_q_lean_atomic" : "rcgmp_mpz_ediv_q_lean";
+  }
 };
 
 struct EModSILowering
@@ -655,6 +718,10 @@ struct EModSILowering
   static StringRef getRuntimeName(bool atomic) {
     return atomic ? "rcgmp_mpz_ediv_r_atomic" : "rcgmp_mpz_ediv_r";
   }
+
+  static StringRef getLeanRuntimeName(bool atomic) {
+    return atomic ? "rcgmp_mpz_ediv_r_lean_atomic" : "rcgmp_mpz_ediv_r_lean";
+  }
 };
 
 struct EDivModSILowering
@@ -664,6 +731,10 @@ struct EDivModSILowering
 
   static StringRef getRuntimeName(bool atomic) {
     return atomic ? "rcgmp_mpz_ediv_qr_atomic" : "rcgmp_mpz_ediv_qr";
+  }
+
+  static StringRef getLeanRuntimeName(bool atomic) {
+    return atomic ? "rcgmp_mpz_ediv_qr_lean_atomic" : "rcgmp_mpz_ediv_qr_lean";
   }
 };
 

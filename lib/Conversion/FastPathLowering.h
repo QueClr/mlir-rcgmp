@@ -48,6 +48,8 @@ struct FastPath {
 // - buildSlowPath(rewriter, loc, op, callRuntime), when the result can often
 //   be found without calling the runtime.
 // For any operation, Derived may shadow:
+// - getRuntimeSymbol(op, atomic), when the operation's attributes select
+//   among several runtime functions;
 // - buildRuntimeOperand(rewriter, loc, operand, word), to convert a non-mpz
 //   operand before the fast path and the runtime receive it, such as to the
 //   handle-width word type, so that the runtime signature does not depend on
@@ -64,6 +66,10 @@ template <typename Derived> struct FastPathLowering : RewritePattern {
 
   static Type getRuntimeResultType(Operation *op) {
     return op->getResult(0).getType();
+  }
+
+  static StringRef getRuntimeSymbol(Operation *, bool atomic) {
+    return Derived::getRuntimeName(atomic);
   }
 
   static Value buildSlowResult(PatternRewriter &, Location, Operation *,
@@ -115,7 +121,7 @@ template <typename Derived> struct FastPathLowering : RewritePattern {
     if (single)
       resultTypes.front() = Derived::getRuntimeResultType(op);
     auto signature = rewriter.getFunctionType(argumentTypes, resultTypes);
-    StringRef name = Derived::getRuntimeName(type.getAtomic());
+    StringRef name = Derived::getRuntimeSymbol(op, type.getAtomic());
     auto module = op->getParentOfType<ModuleOp>();
     auto function = module.lookupSymbol<func::FuncOp>(name);
     if (module.lookupSymbol(name)) {

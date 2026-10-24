@@ -24,4 +24,13 @@ def RCGMP_ArmKind : I32EnumAttr<"ArmKind", "", [
   let genSpecializedAttr = 0;
 }
 
+// What a division does when its divisor is zero.
+def RCGMP_DivZero : I32EnumAttr<"DivZero", "", [
+    I32EnumAttrCase<"trap", 0>,
+    I32EnumAttrCase<"undefined", 1>,
+    I32EnumAttrCase<"lean", 2>]> {
+  let cppNamespace = "::mlir::rcgmp";
+  let genSpecializedAttr = 0;
+}
+
 #endif

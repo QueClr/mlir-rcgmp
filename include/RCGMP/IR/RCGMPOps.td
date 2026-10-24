@@ -218,16 +218,25 @@ def RCGMP_ShRSIOp : RCGMP_ShiftOp<"shrsi", [{
 defvar RCGMP_DivisionArguments = (ins
     Arg<RCGMP_MpzType, "consumed dividend", RCGMP_ConsumedEffects>:$lhs,
     Arg<RCGMP_MpzType, "consumed divisor", RCGMP_ConsumedEffects>:$rhs,
-    UnitAttr:$assumeNonzero);
+    DefaultValuedAttr<RCGMP_DivZeroAttr,
+                      "::mlir::rcgmp::DivZero::trap">:$divZero);
 
 defvar RCGMP_DivisionDescription = [{
     Each operand position consumes one owned reference; aliased heap operands
     require two references. Each result owns one reference. A uniquely owned
     operand may supply result storage; shared operands retain their values.
     Division is exact, with no fixed-width overflow.
+  }];
 
-    A zero divisor terminates the program. With `assume_nonzero`, a zero
-    divisor is undefined behavior instead.
+defvar RCGMP_DivZeroDescription = [{
+    The `divzero` mode sets what a zero divisor does. With `trap`, the default,
+    it terminates the program. With `undefined`, it is undefined behavior. With
+    `lean`, the quotient is zero and the remainder is lhs, as for the integer
+    division and remainder of Lean.
+
+    ```mlir
+    %r = rcgmp.remsi %x, %y divzero<lean> : !rcgmp.mpz
+    ```
   }];
 
 class RCGMP_DivisionOp<string name, string semantics>
@@ -235,9 +244,10 @@ class RCGMP_DivisionOp<string name, string semantics>
   let arguments = RCGMP_DivisionArguments;
   let results = (outs Res<RCGMP_MpzType, "new integer", [MemAlloc]>:$result);
   let assemblyFormat = [{
-    $lhs `,` $rhs (`assume_nonzero` $assumeNonzero^)? attr-dict `:` type($result)
+    $lhs `,` $rhs (`divzero` `` $divZero^)? attr-dict `:` type($result)
   }];
-  let description = RCGMP_DivisionDescription # semantics;
+  let description =
+      RCGMP_DivisionDescription # semantics # RCGMP_DivZeroDescription;
   let hasFolder = 1;
 }
 
@@ -245,6 +255,7 @@ def RCGMP_DivSIOp : RCGMP_DivisionOp<"divsi", [{
     The quotient is rounded toward zero.
   }]> {
   let summary = "Consume two integer references and produce their truncated quotient";
+  let hasCanonicalizeMethod = 1;
 }
 
 def RCGMP_RemSIOp : RCGMP_DivisionOp<"remsi", [{
@@ -257,6 +268,7 @@ def RCGMP_FloorDivSIOp : RCGMP_DivisionOp<"floordivsi", [{
     The quotient is rounded toward negative infinity.
   }]> {
   let summary = "Consume two integer references and produce their floored quotient";
+  let hasCanonicalizeMethod = 1;
 }
 
 def RCGMP_FloorModSIOp : RCGMP_DivisionOp<"floormodsi", [{
@@ -272,6 +284,7 @@ def RCGMP_EDivSIOp : RCGMP_DivisionOp<"edivsi", [{
     nonnegative.
   }]> {
   let summary = "Consume two integer references and produce their Euclidean quotient";
+  let hasCanonicalizeMethod = 1;
 }
 
 def RCGMP_EModSIOp : RCGMP_DivisionOp<"emodsi", [{
@@ -287,9 +300,10 @@ class RCGMP_DivisionPairOp<string name, string semantics>
   let results = (outs Res<RCGMP_MpzType, "new quotient", [MemAlloc]>:$quotient,
                       Res<RCGMP_MpzType, "new remainder", [MemAlloc]>:$remainder);
   let assemblyFormat = [{
-    $lhs `,` $rhs (`assume_nonzero` $assumeNonzero^)? attr-dict `:` type($quotient)
+    $lhs `,` $rhs (`divzero` `` $divZero^)? attr-dict `:` type($quotient)
   }];
-  let description = RCGMP_DivisionDescription # semantics;
+  let description =
+      RCGMP_DivisionDescription # semantics # RCGMP_DivZeroDescription;
   let hasFolder = 1;
 }
 

@@ -66,6 +66,42 @@ void *emodsi_local(void *, void *);
 void *emodsi_atomic(void *, void *);
 rcgmp_mpz_qr edivmodsi_local(void *, void *);
 rcgmp_mpz_qr edivmodsi_atomic(void *, void *);
+void *divsi_undefined_local(void *, void *);
+void *divsi_undefined_atomic(void *, void *);
+void *remsi_undefined_local(void *, void *);
+void *remsi_undefined_atomic(void *, void *);
+void *floordivsi_undefined_local(void *, void *);
+void *floordivsi_undefined_atomic(void *, void *);
+void *floormodsi_undefined_local(void *, void *);
+void *floormodsi_undefined_atomic(void *, void *);
+rcgmp_mpz_qr divremsi_undefined_local(void *, void *);
+rcgmp_mpz_qr divremsi_undefined_atomic(void *, void *);
+rcgmp_mpz_qr floordivmodsi_undefined_local(void *, void *);
+rcgmp_mpz_qr floordivmodsi_undefined_atomic(void *, void *);
+void *edivsi_undefined_local(void *, void *);
+void *edivsi_undefined_atomic(void *, void *);
+void *emodsi_undefined_local(void *, void *);
+void *emodsi_undefined_atomic(void *, void *);
+rcgmp_mpz_qr edivmodsi_undefined_local(void *, void *);
+rcgmp_mpz_qr edivmodsi_undefined_atomic(void *, void *);
+void *divsi_lean_local(void *, void *);
+void *divsi_lean_atomic(void *, void *);
+void *remsi_lean_local(void *, void *);
+void *remsi_lean_atomic(void *, void *);
+void *floordivsi_lean_local(void *, void *);
+void *floordivsi_lean_atomic(void *, void *);
+void *floormodsi_lean_local(void *, void *);
+void *floormodsi_lean_atomic(void *, void *);
+rcgmp_mpz_qr divremsi_lean_local(void *, void *);
+rcgmp_mpz_qr divremsi_lean_atomic(void *, void *);
+rcgmp_mpz_qr floordivmodsi_lean_local(void *, void *);
+rcgmp_mpz_qr floordivmodsi_lean_atomic(void *, void *);
+void *edivsi_lean_local(void *, void *);
+void *edivsi_lean_atomic(void *, void *);
+void *emodsi_lean_local(void *, void *);
+void *emodsi_lean_atomic(void *, void *);
+rcgmp_mpz_qr edivmodsi_lean_local(void *, void *);
+rcgmp_mpz_qr edivmodsi_lean_atomic(void *, void *);
 void *retain_local(void *);
 void *retain_atomic(void *);
 void release_local(void *);
@@ -282,16 +318,42 @@ enum class DivisionOperator {
   edivmodsi
 };
 
-// The compiled and runtime entry points of a division, indexed by counting,
-// and the GMP function computing its quotient and remainder. A division with
-// one result has single entry points, and one with both has pair entry points.
+// What a division does with a zero divisor, as the divzero modes of the
+// division operations name it.
+enum class DivZero { trap, undefined, lean };
+
+constexpr std::string_view name(DivZero mode) {
+  constexpr std::array<std::string_view, 3> names{"trap", "undefined", "lean"};
+  return names[std::to_underlying(mode)];
+}
+
+template <typename Sink> void AbslStringify(Sink &sink, DivZero mode) {
+  sink.Append(name(mode));
+}
+
+constexpr std::array divZeros{DivZero::trap, DivZero::undefined, DivZero::lean};
+
+fuzztest::Domain<DivZero> AnyDivZero() {
+  return fuzztest::ElementOf(std::vector(divZeros.begin(), divZeros.end()));
+}
+
+// The compiled entry points of a division, indexed by mode and counting, its
+// runtime entry points, indexed by whether they are lean and by counting, and
+// the GMP function computing its quotient and remainder. A division with one
+// result has single entry points, and one with both has pair entry points.
+// An undefined division calls the trapping runtime entry points.
 struct DivisionOperation {
+  template <typename Function>
+  using ByMode = std::array<std::array<Function *, 2>, 3>;
+  template <typename Function>
+  using ByLean = std::array<std::array<Function *, 2>, 2>;
+
   std::string_view name;
   bool quotient, remainder;
-  std::array<void *(*)(void *, void *), 2> compiled;
-  std::array<void *(*)(void *, void *, std::uint32_t), 2> runtime;
-  std::array<rcgmp_mpz_qr (*)(void *, void *), 2> compiledPair;
-  std::array<rcgmp_mpz_qr (*)(void *, void *, std::uint32_t), 2> runtimePair;
+  ByMode<void *(void *, void *)> compiled;
+  ByLean<void *(void *, void *, std::uint32_t)> runtime;
+  ByMode<rcgmp_mpz_qr(void *, void *)> compiledPair;
+  ByLean<rcgmp_mpz_qr(void *, void *, std::uint32_t)> runtimePair;
   void (*oracle)(mpz_ptr, mpz_ptr, mpz_srcptr, mpz_srcptr);
 };
 
@@ -299,32 +361,44 @@ constexpr std::array<DivisionOperation, 9> divisionOperations{{
     {"divsi",
      true,
      false,
-     {divsi_local, divsi_atomic},
-     {rcgmp_mpz_tdiv_q, rcgmp_mpz_tdiv_q_atomic},
+     {{{divsi_local, divsi_atomic},
+       {divsi_undefined_local, divsi_undefined_atomic},
+       {divsi_lean_local, divsi_lean_atomic}}},
+     {{{rcgmp_mpz_tdiv_q, rcgmp_mpz_tdiv_q_atomic},
+       {rcgmp_mpz_tdiv_q_lean, rcgmp_mpz_tdiv_q_lean_atomic}}},
      {},
      {},
      mpz_tdiv_qr},
     {"remsi",
      false,
      true,
-     {remsi_local, remsi_atomic},
-     {rcgmp_mpz_tdiv_r, rcgmp_mpz_tdiv_r_atomic},
+     {{{remsi_local, remsi_atomic},
+       {remsi_undefined_local, remsi_undefined_atomic},
+       {remsi_lean_local, remsi_lean_atomic}}},
+     {{{rcgmp_mpz_tdiv_r, rcgmp_mpz_tdiv_r_atomic},
+       {rcgmp_mpz_tdiv_r_lean, rcgmp_mpz_tdiv_r_lean_atomic}}},
      {},
      {},
      mpz_tdiv_qr},
     {"floordivsi",
      true,
      false,
-     {floordivsi_local, floordivsi_atomic},
-     {rcgmp_mpz_fdiv_q, rcgmp_mpz_fdiv_q_atomic},
+     {{{floordivsi_local, floordivsi_atomic},
+       {floordivsi_undefined_local, floordivsi_undefined_atomic},
+       {floordivsi_lean_local, floordivsi_lean_atomic}}},
+     {{{rcgmp_mpz_fdiv_q, rcgmp_mpz_fdiv_q_atomic},
+       {rcgmp_mpz_fdiv_q_lean, rcgmp_mpz_fdiv_q_lean_atomic}}},
      {},
      {},
      mpz_fdiv_qr},
     {"floormodsi",
      false,
      true,
-     {floormodsi_local, floormodsi_atomic},
-     {rcgmp_mpz_fdiv_r, rcgmp_mpz_fdiv_r_atomic},
+     {{{floormodsi_local, floormodsi_atomic},
+       {floormodsi_undefined_local, floormodsi_undefined_atomic},
+       {floormodsi_lean_local, floormodsi_lean_atomic}}},
+     {{{rcgmp_mpz_fdiv_r, rcgmp_mpz_fdiv_r_atomic},
+       {rcgmp_mpz_fdiv_r_lean, rcgmp_mpz_fdiv_r_lean_atomic}}},
      {},
      {},
      mpz_fdiv_qr},
@@ -333,30 +407,42 @@ constexpr std::array<DivisionOperation, 9> divisionOperations{{
      true,
      {},
      {},
-     {divremsi_local, divremsi_atomic},
-     {rcgmp_mpz_tdiv_qr, rcgmp_mpz_tdiv_qr_atomic},
+     {{{divremsi_local, divremsi_atomic},
+       {divremsi_undefined_local, divremsi_undefined_atomic},
+       {divremsi_lean_local, divremsi_lean_atomic}}},
+     {{{rcgmp_mpz_tdiv_qr, rcgmp_mpz_tdiv_qr_atomic},
+       {rcgmp_mpz_tdiv_qr_lean, rcgmp_mpz_tdiv_qr_lean_atomic}}},
      mpz_tdiv_qr},
     {"floordivmodsi",
      true,
      true,
      {},
      {},
-     {floordivmodsi_local, floordivmodsi_atomic},
-     {rcgmp_mpz_fdiv_qr, rcgmp_mpz_fdiv_qr_atomic},
+     {{{floordivmodsi_local, floordivmodsi_atomic},
+       {floordivmodsi_undefined_local, floordivmodsi_undefined_atomic},
+       {floordivmodsi_lean_local, floordivmodsi_lean_atomic}}},
+     {{{rcgmp_mpz_fdiv_qr, rcgmp_mpz_fdiv_qr_atomic},
+       {rcgmp_mpz_fdiv_qr_lean, rcgmp_mpz_fdiv_qr_lean_atomic}}},
      mpz_fdiv_qr},
     {"edivsi",
      true,
      false,
-     {edivsi_local, edivsi_atomic},
-     {rcgmp_mpz_ediv_q, rcgmp_mpz_ediv_q_atomic},
+     {{{edivsi_local, edivsi_atomic},
+       {edivsi_undefined_local, edivsi_undefined_atomic},
+       {edivsi_lean_local, edivsi_lean_atomic}}},
+     {{{rcgmp_mpz_ediv_q, rcgmp_mpz_ediv_q_atomic},
+       {rcgmp_mpz_ediv_q_lean, rcgmp_mpz_ediv_q_lean_atomic}}},
      {},
      {},
      gmpEuclidean},
     {"emodsi",
      false,
      true,
-     {emodsi_local, emodsi_atomic},
-     {rcgmp_mpz_ediv_r, rcgmp_mpz_ediv_r_atomic},
+     {{{emodsi_local, emodsi_atomic},
+       {emodsi_undefined_local, emodsi_undefined_atomic},
+       {emodsi_lean_local, emodsi_lean_atomic}}},
+     {{{rcgmp_mpz_ediv_r, rcgmp_mpz_ediv_r_atomic},
+       {rcgmp_mpz_ediv_r_lean, rcgmp_mpz_ediv_r_lean_atomic}}},
      {},
      {},
      gmpEuclidean},
@@ -365,8 +451,11 @@ constexpr std::array<DivisionOperation, 9> divisionOperations{{
      true,
      {},
      {},
-     {edivmodsi_local, edivmodsi_atomic},
-     {rcgmp_mpz_ediv_qr, rcgmp_mpz_ediv_qr_atomic},
+     {{{edivmodsi_local, edivmodsi_atomic},
+       {edivmodsi_undefined_local, edivmodsi_undefined_atomic},
+       {edivmodsi_lean_local, edivmodsi_lean_atomic}}},
+     {{{rcgmp_mpz_ediv_qr, rcgmp_mpz_ediv_qr_atomic},
+       {rcgmp_mpz_ediv_qr_lean, rcgmp_mpz_ediv_qr_lean_atomic}}},
      gmpEuclidean},
 }};
 

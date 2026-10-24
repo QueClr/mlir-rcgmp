@@ -11,6 +11,8 @@
 // SCF-DAG: func.func private @rcgmp_mpz_ediv_q(!rcgmp.mpz, !rcgmp.mpz, i32) -> !rcgmp.mpz
 // SCF-DAG: func.func private @rcgmp_mpz_ediv_r_atomic(!rcgmp.mpz<atomic>, !rcgmp.mpz<atomic>, i32) -> !rcgmp.mpz<atomic>
 // SCF-DAG: func.func private @rcgmp_mpz_ediv_qr(!rcgmp.mpz, !rcgmp.mpz, i32) -> (!rcgmp.mpz, !rcgmp.mpz)
+// SCF-DAG: func.func private @rcgmp_mpz_tdiv_r_lean(!rcgmp.mpz, !rcgmp.mpz, i32) -> !rcgmp.mpz
+// SCF-DAG: func.func private @rcgmp_mpz_fdiv_qr_lean_atomic(!rcgmp.mpz<atomic>, !rcgmp.mpz<atomic>, i32) -> (!rcgmp.mpz<atomic>, !rcgmp.mpz<atomic>)
 
 // A zero divisor is replaced by one and invalidates the fast path, as does
 // dividing the immediate minimum by -1, which the operands show before the
@@ -46,8 +48,8 @@
 // SCF-NOT: arith.constant -2305843009213693952
 // SCF: scf.if
 
-// assume_nonzero divides by the untagged divisor directly.
-// SCF-LABEL: func.func @divsi_assume
+// An undefined zero divisor divides by the untagged divisor directly.
+// SCF-LABEL: func.func @divsi_undefined
 // SCF: arith.shrsi
 // SCF: %[[Y:.*]] = arith.shrsi
 // SCF-NOT: arith.select
@@ -84,6 +86,45 @@
 // SCF-NOT: arith.remsi
 // SCF: arith.remui
 // SCF: func.call @rcgmp_mpz_ediv_qr
+
+// A lean zero divisor leaves the fast path valid. The word division divides
+// by the word minimum instead, which leaves the truncated quotient zero and
+// the remainder x.
+// SCF-LABEL: func.func @divsi_lean_local
+// SCF: %[[ZERO:.*]] = arith.constant 0 : i64
+// SCF: arith.shrsi
+// SCF: %[[Y:.*]] = arith.shrsi
+// SCF: %[[IMMEDIATE:.*]] = arith.cmpi eq
+// SCF: %[[NONZERO:.*]] = arith.cmpi ne, %[[Y]], %[[ZERO]]
+// SCF: %[[MIN:.*]] = arith.constant -9223372036854775808 : i64
+// SCF: %[[DIVISOR:.*]] = arith.select %[[NONZERO]], %[[Y]], %[[MIN]]
+// SCF: arith.divsi %{{.*}}, %[[DIVISOR]]
+// SCF: %[[VALID:.*]] = arith.andi %[[IMMEDIATE]], %{{.*}} : i1
+// SCF: scf.if %[[VALID]]
+// SCF: func.call @rcgmp_mpz_tdiv_q_lean(
+
+// Floored and Euclidean division adjust the remainder by the zero divisor
+// itself, which leaves it x, but move the quotient of a negative x, which is
+// then replaced by zero.
+// SCF-LABEL: func.func @floordivmodsi_lean_local
+// SCF: arith.shrsi
+// SCF: %[[Y:.*]] = arith.shrsi
+// SCF: %[[NONZERO:.*]] = arith.cmpi ne, %[[Y]]
+// SCF: %[[DIVISOR:.*]] = arith.select %[[NONZERO]], %[[Y]]
+// SCF: %[[R:.*]] = arith.remsi %{{.*}}, %[[DIVISOR]]
+// SCF: arith.xori %[[R]], %[[Y]]
+// SCF: %[[Q:.*]] = arith.subi
+// SCF: arith.select %{{.*}}, %[[Y]]
+// SCF: arith.select %[[NONZERO]], %[[Q]]
+// SCF: func.call @rcgmp_mpz_fdiv_qr_lean(
+// SCF-LABEL: func.func @edivsi_lean_atomic
+// SCF: %[[NONZERO:.*]] = arith.cmpi ne
+// SCF: %[[B:.*]] = arith.subi
+// SCF: %[[DIVISOR:.*]] = arith.select %[[NONZERO]], %[[B]]
+// SCF: arith.divui %{{.*}}, %[[DIVISOR]]
+// SCF: %[[Q:.*]] = arith.subi
+// SCF: arith.select %[[NONZERO]], %[[Q]]
+// SCF: func.call @rcgmp_mpz_ediv_q_lean_atomic(
 func.func @divsi_local(%x: !rcgmp.mpz, %y: !rcgmp.mpz) -> !rcgmp.mpz {
   %r = rcgmp.divsi %x, %y : !rcgmp.mpz
   return %r : !rcgmp.mpz
@@ -116,8 +157,8 @@ func.func @floormodsi_atomic(%x: !rcgmp.mpz<atomic>, %y: !rcgmp.mpz<atomic>) -> 
   %r = rcgmp.floormodsi %x, %y : !rcgmp.mpz<atomic>
   return %r : !rcgmp.mpz<atomic>
 }
-func.func @divsi_assume(%x: !rcgmp.mpz, %y: !rcgmp.mpz) -> !rcgmp.mpz {
-  %r = rcgmp.divsi %x, %y assume_nonzero : !rcgmp.mpz
+func.func @divsi_undefined(%x: !rcgmp.mpz, %y: !rcgmp.mpz) -> !rcgmp.mpz {
+  %r = rcgmp.divsi %x, %y divzero<undefined> : !rcgmp.mpz
   return %r : !rcgmp.mpz
 }
 func.func @divremsi_local(%x: !rcgmp.mpz, %y: !rcgmp.mpz) -> (!rcgmp.mpz, !rcgmp.mpz) {
@@ -169,4 +210,76 @@ func.func @edivmodsi_by_minus_8(%x: !rcgmp.mpz) -> (!rcgmp.mpz, !rcgmp.mpz) {
   %c = rcgmp.constant -8 : !rcgmp.mpz
   %q, %r = rcgmp.edivmodsi %x, %c : !rcgmp.mpz
   return %q, %r : !rcgmp.mpz, !rcgmp.mpz
+}
+func.func @divsi_lean_local(%x: !rcgmp.mpz, %y: !rcgmp.mpz) -> !rcgmp.mpz {
+  %r = rcgmp.divsi %x, %y divzero<lean> : !rcgmp.mpz
+  return %r : !rcgmp.mpz
+}
+func.func @divsi_lean_atomic(%x: !rcgmp.mpz<atomic>, %y: !rcgmp.mpz<atomic>) -> !rcgmp.mpz<atomic> {
+  %r = rcgmp.divsi %x, %y divzero<lean> : !rcgmp.mpz<atomic>
+  return %r : !rcgmp.mpz<atomic>
+}
+func.func @remsi_lean_local(%x: !rcgmp.mpz, %y: !rcgmp.mpz) -> !rcgmp.mpz {
+  %r = rcgmp.remsi %x, %y divzero<lean> : !rcgmp.mpz
+  return %r : !rcgmp.mpz
+}
+func.func @remsi_lean_atomic(%x: !rcgmp.mpz<atomic>, %y: !rcgmp.mpz<atomic>) -> !rcgmp.mpz<atomic> {
+  %r = rcgmp.remsi %x, %y divzero<lean> : !rcgmp.mpz<atomic>
+  return %r : !rcgmp.mpz<atomic>
+}
+func.func @floordivsi_lean_local(%x: !rcgmp.mpz, %y: !rcgmp.mpz) -> !rcgmp.mpz {
+  %r = rcgmp.floordivsi %x, %y divzero<lean> : !rcgmp.mpz
+  return %r : !rcgmp.mpz
+}
+func.func @floordivsi_lean_atomic(%x: !rcgmp.mpz<atomic>, %y: !rcgmp.mpz<atomic>) -> !rcgmp.mpz<atomic> {
+  %r = rcgmp.floordivsi %x, %y divzero<lean> : !rcgmp.mpz<atomic>
+  return %r : !rcgmp.mpz<atomic>
+}
+func.func @floormodsi_lean_local(%x: !rcgmp.mpz, %y: !rcgmp.mpz) -> !rcgmp.mpz {
+  %r = rcgmp.floormodsi %x, %y divzero<lean> : !rcgmp.mpz
+  return %r : !rcgmp.mpz
+}
+func.func @floormodsi_lean_atomic(%x: !rcgmp.mpz<atomic>, %y: !rcgmp.mpz<atomic>) -> !rcgmp.mpz<atomic> {
+  %r = rcgmp.floormodsi %x, %y divzero<lean> : !rcgmp.mpz<atomic>
+  return %r : !rcgmp.mpz<atomic>
+}
+func.func @divremsi_lean_local(%x: !rcgmp.mpz, %y: !rcgmp.mpz) -> (!rcgmp.mpz, !rcgmp.mpz) {
+  %q, %r = rcgmp.divremsi %x, %y divzero<lean> : !rcgmp.mpz
+  return %q, %r : !rcgmp.mpz, !rcgmp.mpz
+}
+func.func @divremsi_lean_atomic(%x: !rcgmp.mpz<atomic>, %y: !rcgmp.mpz<atomic>) -> (!rcgmp.mpz<atomic>, !rcgmp.mpz<atomic>) {
+  %q, %r = rcgmp.divremsi %x, %y divzero<lean> : !rcgmp.mpz<atomic>
+  return %q, %r : !rcgmp.mpz<atomic>, !rcgmp.mpz<atomic>
+}
+func.func @floordivmodsi_lean_local(%x: !rcgmp.mpz, %y: !rcgmp.mpz) -> (!rcgmp.mpz, !rcgmp.mpz) {
+  %q, %r = rcgmp.floordivmodsi %x, %y divzero<lean> : !rcgmp.mpz
+  return %q, %r : !rcgmp.mpz, !rcgmp.mpz
+}
+func.func @floordivmodsi_lean_atomic(%x: !rcgmp.mpz<atomic>, %y: !rcgmp.mpz<atomic>) -> (!rcgmp.mpz<atomic>, !rcgmp.mpz<atomic>) {
+  %q, %r = rcgmp.floordivmodsi %x, %y divzero<lean> : !rcgmp.mpz<atomic>
+  return %q, %r : !rcgmp.mpz<atomic>, !rcgmp.mpz<atomic>
+}
+func.func @edivsi_lean_local(%x: !rcgmp.mpz, %y: !rcgmp.mpz) -> !rcgmp.mpz {
+  %r = rcgmp.edivsi %x, %y divzero<lean> : !rcgmp.mpz
+  return %r : !rcgmp.mpz
+}
+func.func @edivsi_lean_atomic(%x: !rcgmp.mpz<atomic>, %y: !rcgmp.mpz<atomic>) -> !rcgmp.mpz<atomic> {
+  %r = rcgmp.edivsi %x, %y divzero<lean> : !rcgmp.mpz<atomic>
+  return %r : !rcgmp.mpz<atomic>
+}
+func.func @emodsi_lean_local(%x: !rcgmp.mpz, %y: !rcgmp.mpz) -> !rcgmp.mpz {
+  %r = rcgmp.emodsi %x, %y divzero<lean> : !rcgmp.mpz
+  return %r : !rcgmp.mpz
+}
+func.func @emodsi_lean_atomic(%x: !rcgmp.mpz<atomic>, %y: !rcgmp.mpz<atomic>) -> !rcgmp.mpz<atomic> {
+  %r = rcgmp.emodsi %x, %y divzero<lean> : !rcgmp.mpz<atomic>
+  return %r : !rcgmp.mpz<atomic>
+}
+func.func @edivmodsi_lean_local(%x: !rcgmp.mpz, %y: !rcgmp.mpz) -> (!rcgmp.mpz, !rcgmp.mpz) {
+  %q, %r = rcgmp.edivmodsi %x, %y divzero<lean> : !rcgmp.mpz
+  return %q, %r : !rcgmp.mpz, !rcgmp.mpz
+}
+func.func @edivmodsi_lean_atomic(%x: !rcgmp.mpz<atomic>, %y: !rcgmp.mpz<atomic>) -> (!rcgmp.mpz<atomic>, !rcgmp.mpz<atomic>) {
+  %q, %r = rcgmp.edivmodsi %x, %y divzero<lean> : !rcgmp.mpz<atomic>
+  return %q, %r : !rcgmp.mpz<atomic>, !rcgmp.mpz<atomic>
 }

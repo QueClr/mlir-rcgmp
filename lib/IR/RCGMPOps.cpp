@@ -244,15 +244,22 @@ enum class Rounding { truncate, floor, euclidean };
 } // namespace
 
 // The quotient and remainder of constant operands, rounded toward zero,
-// toward negative infinity, or to a nonnegative remainder. A zero divisor is
-// not folded: without assume_nonzero it terminates the program, and with it
-// it is undefined.
+// toward negative infinity, or to a nonnegative remainder. A zero divisor
+// folds only in lean mode, where the quotient is zero and the remainder lhs:
+// in trap mode it terminates the program, and in undefined mode it is
+// undefined.
 static std::optional<std::pair<APInt, APInt>>
-divideConstants(ArrayRef<Attribute> operands, Rounding rounding) {
+divideConstants(ArrayRef<Attribute> operands, Rounding rounding,
+                DivZero divZero) {
   std::optional<APInt> lhs = mpzOperand(operands[0]),
                        rhs = mpzOperand(operands[1]);
-  if (!lhs || !rhs || rhs->isZero())
+  if (!lhs || !rhs)
     return std::nullopt;
+  if (rhs->isZero()) {
+    if (divZero != DivZero::lean)
+      return std::nullopt;
+    return std::pair(APInt(1, 0), *lhs);
+  }
   // One extra bit holds the quotient of the minimum by -1.
   auto [a, b] = widened(*lhs, *rhs, 1);
   APInt quotient, remainder;
@@ -280,9 +287,22 @@ divideConstants(ArrayRef<Attribute> operands, Rounding rounding) {
   return std::pair(quotient, remainder);
 }
 
-template <Rounding rounding, bool quotient>
-static OpFoldResult foldDivision(Operation *op, ArrayRef<Attribute> operands) {
-  auto results = divideConstants(operands, rounding);
+// Whether a division gives the quotient zero and the remainder lhs for any
+// lhs: a lean division by a constant zero.
+template <typename Op>
+static bool dividesLeanByZero(Op op, ArrayRef<Attribute> operands) {
+  std::optional<APInt> rhs = mpzOperand(operands[1]);
+  return op.getDivZero() == DivZero::lean && rhs && rhs->isZero();
+}
+
+template <Rounding rounding, bool quotient, typename Op>
+static OpFoldResult foldDivision(Op op, ArrayRef<Attribute> operands) {
+  // The remainder takes over the reference to lhs, and the constant divisor
+  // needs no release. A quotient by zero would leave lhs unreleased, so the
+  // canonicalization releases it instead.
+  if (!quotient && dividesLeanByZero(op, operands))
+    return op.getLhs();
+  auto results = divideConstants(operands, rounding, op.getDivZero());
   if (!results)
     return {};
   return foldedMpz(op->getContext(),
@@ -313,11 +333,15 @@ OpFoldResult EModSIOp::fold(FoldAdaptor adaptor) {
   return foldDivision<Rounding::euclidean, false>(*this, adaptor.getOperands());
 }
 
-template <Rounding rounding>
-static LogicalResult foldDivisionPair(Operation *op,
-                                      ArrayRef<Attribute> operands,
+template <Rounding rounding, typename Op>
+static LogicalResult foldDivisionPair(Op op, ArrayRef<Attribute> operands,
                                       SmallVectorImpl<OpFoldResult> &results) {
-  auto divided = divideConstants(operands, rounding);
+  if (dividesLeanByZero(op, operands)) {
+    results.push_back(MpzValueAttr::get(op->getContext(), APInt(1, 0)));
+    results.push_back(op.getLhs());
+    return success();
+  }
+  auto divided = divideConstants(operands, rounding, op.getDivZero());
   if (!divided)
     return failure();
   results.push_back(foldedMpz(op->getContext(), divided->first));
@@ -421,6 +445,33 @@ LogicalResult ReleaseOp::canonicalize(ReleaseOp op, PatternRewriter &rewriter) {
     return failure();
   rewriter.eraseOp(op);
   return success();
+}
+
+// A lean quotient by a constant zero is zero, and lhs, which no result takes
+// over, is released.
+template <typename Op>
+static LogicalResult canonicalizeLeanQuotient(Op op,
+                                              PatternRewriter &rewriter) {
+  auto divisor = op.getRhs().template getDefiningOp<ConstantOp>();
+  if (op.getDivZero() != DivZero::lean || !divisor ||
+      !divisor.getValue().isZero())
+    return failure();
+  ReleaseOp::create(rewriter, op.getLoc(), op.getLhs());
+  rewriter.replaceOpWithNewOp<ConstantOp>(op, op.getType(), APInt(1, 0));
+  return success();
+}
+
+LogicalResult DivSIOp::canonicalize(DivSIOp op, PatternRewriter &rewriter) {
+  return canonicalizeLeanQuotient(op, rewriter);
+}
+
+LogicalResult FloorDivSIOp::canonicalize(FloorDivSIOp op,
+                                         PatternRewriter &rewriter) {
+  return canonicalizeLeanQuotient(op, rewriter);
+}
+
+LogicalResult EDivSIOp::canonicalize(EDivSIOp op, PatternRewriter &rewriter) {
+  return canonicalizeLeanQuotient(op, rewriter);
 }
 
 LogicalResult ConstantOp::verify() {
