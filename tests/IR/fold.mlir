@@ -259,6 +259,19 @@ func.func @limbs() -> (index, index, index, i64, i64, i64, i64, i64, i64) {
       : index, index, index, i64, i64, i64, i64, i64, i64
 }
 
+// Rounding is to nearest with ties to even, overflowing to infinity.
+// CHECK-LABEL: func.func @floating
+// CHECK-DAG: %[[TIE:.*]] = arith.constant 0x4340000000000000 : f64
+// CHECK-DAG: %[[INF:.*]] = arith.constant 0x7F800000 : f32
+// CHECK: return %[[TIE]], %[[INF]]
+func.func @floating() -> (f64, f32) {
+  %tie = rcgmp.constant 9007199254740993 : !rcgmp.mpz
+  %huge = rcgmp.constant 340282366920938463463374607431768211456 : !rcgmp.mpz
+  %a = rcgmp.sitofp %tie : !rcgmp.mpz to f64
+  %b = rcgmp.sitofp %huge : !rcgmp.mpz to f32
+  return %a, %b : f64, f32
+}
+
 // Constants need no reference counting.
 // CHECK-LABEL: func.func @counting
 // CHECK-NOT: rcgmp.retain

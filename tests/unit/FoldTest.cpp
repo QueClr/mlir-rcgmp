@@ -1,6 +1,7 @@
 // Folds operations on constants and compares the folded constants with GMP.
 #include "RCGMP/IR/RCGMPDialect.h"
 #include "RCGMP/IR/RCGMPOps.h"
+#include "RCGMP/Runtime/Mpz.h"
 #include <fuzztest/fuzztest.h>
 #include <gmp.h>
 #include <gtest/gtest.h>
@@ -85,6 +86,10 @@ public:
     return builder.getIntegerType(width);
   }
   Type indexType() { return builder.getIndexType(); }
+
+  FloatType floatType(unsigned width) {
+    return width == 32 ? FloatType(builder.getF32Type()) : builder.getF64Type();
+  }
 
   static MLIRContext &context() {
     static MLIRContext *context = [] {
@@ -370,6 +375,24 @@ void checkLimbs(const Integer &x) {
   }
 }
 
+// Folded rounding matches the runtime.
+void checkFloating(const Integer &x) {
+  Folder folder;
+  void *runtime = ::rcgmp::test::toRuntime(x);
+  for (FloatType type : {folder.floatType(32), folder.floatType(64)}) {
+    Value folded = folder.fold<mlir::rcgmp::SIToFPOp>(type, folder.mpz(x))[0];
+    auto constant = folded.getDefiningOp<arith::ConstantOp>();
+    ASSERT_TRUE(constant);
+    APFloat value = cast<FloatAttr>(constant.getValue()).getValue();
+    double expected =
+        type.isF32() ? rcgmp_mpz_to_f32(runtime) : rcgmp_mpz_to_f64(runtime);
+    EXPECT_EQ(type.isF32() ? value.convertToFloat() : value.convertToDouble(),
+              expected)
+        << "sitofp " << x;
+  }
+  rcgmp_mpz_release(runtime, 0);
+}
+
 void FoldsMatchGmp(const std::pair<Integer, Integer> &operands, unsigned amount,
                    unsigned width) {
   auto &[x, y] = operands;
@@ -393,6 +416,7 @@ void FoldsMatchGmp(const std::pair<Integer, Integer> &operands, unsigned amount,
   checkLogs(x, width);
   checkBits(x, amount);
   checkLimbs(x);
+  checkFloating(x);
 }
 FUZZ_TEST(Fold, FoldsMatchGmp)
     .WithDomains(::rcgmp::test::AnyOperands(), fuzztest::InRange(0u, 400u),

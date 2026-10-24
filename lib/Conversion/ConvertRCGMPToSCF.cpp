@@ -1584,6 +1584,33 @@ struct LimbLowering : OpRewritePattern<LimbOp> {
   }
 };
 
+// Lowers rcgmp.sitofp. An immediate converts inline, rounded as arith.sitofp
+// rounds; the runtime rounds a heap integer.
+struct SIToFPLowering : FastPathLowering<SIToFPLowering> {
+  using FastPathLowering::FastPathLowering;
+  using Op = SIToFPOp;
+
+  static constexpr bool consumesOperands = false;
+
+  static StringRef getRuntimeSymbol(Operation *op, bool atomic) {
+    if (op->getResult(0).getType().isF32())
+      return atomic ? "rcgmp_mpz_to_f32_atomic" : "rcgmp_mpz_to_f32";
+    return atomic ? "rcgmp_mpz_to_f64_atomic" : "rcgmp_mpz_to_f64";
+  }
+
+  static FastPath buildFastPath(PatternRewriter &rewriter, Location loc,
+                                Operation *op, ValueRange operands) {
+    Value bits = operands[0];
+    auto word = cast<IntegerType>(bits.getType());
+    Value value = arith::ShRSIOp::create(
+        rewriter, loc, bits,
+        arith::ConstantIntOp::create(rewriter, loc, word, 2));
+    Value rounded = arith::SIToFPOp::create(rewriter, loc,
+                                            op->getResult(0).getType(), value);
+    return {{rounded}, allImmediate(rewriter, loc, bits)};
+  }
+};
+
 struct CmpILowering : FastPathLowering<CmpILowering> {
   using FastPathLowering::FastPathLowering;
   using Op = CmpIOp;
@@ -1740,18 +1767,17 @@ struct ConvertRCGMPToSCFPass
   }
   void runOnOperation() override {
     RewritePatternSet patterns(&getContext());
-    patterns
-        .add<ConstantLowering, ExtSILowering, ExtUILowering, RetainLowering,
-             ReleaseLowering, AddILowering, SubILowering, MonusILowering,
-             MulILowering, GcdILowering, AndILowering, XOrILowering,
-             OrILowering, NotILowering, NegILowering, AbsILowering,
-             ShLILowering, ShRSILowering, FloorMod2ExpILowering, IPowILowering,
-             DivSILowering, RemSILowering, FloorDivSILowering,
-             FloorModSILowering, DivRemSILowering, FloorDivModSILowering,
-             EDivSILowering, EModSILowering, EDivModSILowering, CmpILowering,
-             TruncationLowering<TruncIOp>, TruncationLowering<TruncIOverflowOp>,
-             Log2ILowering, TestBitILowering, LimbCountLowering, LimbLowering>(
-            &getContext());
+    patterns.add<
+        ConstantLowering, ExtSILowering, ExtUILowering, RetainLowering,
+        ReleaseLowering, AddILowering, SubILowering, MonusILowering,
+        MulILowering, GcdILowering, AndILowering, XOrILowering, OrILowering,
+        NotILowering, NegILowering, AbsILowering, ShLILowering, ShRSILowering,
+        FloorMod2ExpILowering, IPowILowering, DivSILowering, RemSILowering,
+        FloorDivSILowering, FloorModSILowering, DivRemSILowering,
+        FloorDivModSILowering, EDivSILowering, EModSILowering,
+        EDivModSILowering, CmpILowering, TruncationLowering<TruncIOp>,
+        TruncationLowering<TruncIOverflowOp>, Log2ILowering, TestBitILowering,
+        LimbCountLowering, LimbLowering, SIToFPLowering>(&getContext());
     populateMatchLoweringPatterns(patterns);
     ConversionTarget target(getContext());
     target.addIllegalOp<
@@ -1760,7 +1786,7 @@ struct ConvertRCGMPToSCFPass
         ShLIOp, ShRSIOp, FloorMod2ExpIOp, IPowIOp, DivSIOp, RemSIOp,
         FloorDivSIOp, FloorModSIOp, DivRemSIOp, FloorDivModSIOp, EDivSIOp,
         EModSIOp, EDivModSIOp, CmpIOp, TruncIOp, TruncIOverflowOp, Log2IOp,
-        TestBitIOp, LimbCountOp, LimbOp, MatchOp, YieldOp>();
+        TestBitIOp, LimbCountOp, LimbOp, SIToFPOp, MatchOp, YieldOp>();
     target.markUnknownOpDynamicallyLegal([](Operation *) { return true; });
     if (failed(applyPartialConversion(getOperation(), target,
                                       std::move(patterns))))
