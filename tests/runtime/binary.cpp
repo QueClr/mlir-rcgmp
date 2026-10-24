@@ -1,4 +1,4 @@
-// Compiled subtraction, multiplication, AND, XOR, and OR.
+// Compiled subtraction, monus, multiplication, AND, XOR, and OR.
 #include "RCGMP/Runtime/Mpz.h"
 #include <fuzztest/fuzztest.h>
 #include <gmock/gmock.h>
@@ -21,6 +21,8 @@ import rcgmp.testing.allocator;
 extern "C" {
 void *sub_local(void *, void *);
 void *sub_atomic(void *, void *);
+void *monus_local(void *, void *);
+void *monus_atomic(void *, void *);
 void *mul_local(void *, void *);
 void *mul_atomic(void *, void *);
 void *and_local(void *, void *);
@@ -37,7 +39,14 @@ using rcgmp::Counting;
 using rcgmp::Handle;
 using namespace rcgmp::test;
 
-enum class Operator { subtract, multiply, bitwiseAnd, bitwiseXor, bitwiseOr };
+enum class Operator {
+  subtract,
+  monus,
+  multiply,
+  bitwiseAnd,
+  bitwiseXor,
+  bitwiseOr
+};
 
 struct Operation {
   std::string_view name;
@@ -46,13 +55,18 @@ struct Operation {
   Oracle oracle;
 };
 
-constexpr std::array<Operation, 5> operations{{
+constexpr std::array<Operation, 6> operations{{
     {"sub", {sub_local, sub_atomic}, mpz_sub},
+    {"monus", {monus_local, monus_atomic}, gmpMonus},
     {"mul", {mul_local, mul_atomic}, mpz_mul},
     {"and", {and_local, and_atomic}, mpz_and},
     {"xor", {xor_local, xor_atomic}, mpz_xor},
     {"or", {or_local, or_atomic}, mpz_ior},
 }};
+
+constexpr std::array operators{Operator::subtract,   Operator::monus,
+                               Operator::multiply,   Operator::bitwiseAnd,
+                               Operator::bitwiseXor, Operator::bitwiseOr};
 
 const Operation &operation(Operator op) {
   return operations[std::to_underlying(op)];
@@ -69,10 +83,8 @@ void MatchesGmp(Operator op, const std::pair<Integer, Integer> &operands,
               operation(op).oracle, lhs, rhs, counting, sharing);
 }
 FUZZ_TEST(Binary, MatchesGmp)
-    .WithDomains(fuzztest::ElementOf({Operator::subtract, Operator::multiply,
-                                      Operator::bitwiseAnd,
-                                      Operator::bitwiseXor,
-                                      Operator::bitwiseOr}),
+    .WithDomains(fuzztest::ElementOf(std::vector(operators.begin(),
+                                                 operators.end())),
                  AnyOperands(), AnyCounting(), AnySharing());
 
 class BinaryTest
@@ -104,14 +116,10 @@ std::string parameterName(
          std::string(rcgmp::name(counting));
 }
 
-INSTANTIATE_TEST_SUITE_P(
-    Operations, BinaryTest,
-    ::testing::Combine(::testing::Values(Operator::subtract, Operator::multiply,
-                                         Operator::bitwiseAnd,
-                                         Operator::bitwiseXor,
-                                         Operator::bitwiseOr),
-                       ::testing::ValuesIn(countings)),
-    parameterName);
+INSTANTIATE_TEST_SUITE_P(Operations, BinaryTest,
+                         ::testing::Combine(::testing::ValuesIn(operators),
+                                            ::testing::ValuesIn(countings)),
+                         parameterName);
 
 TEST_P(BinaryTest, MatchesGmpOnBoundaries) {
   // Products of operands near the square root of the immediate bound land on
@@ -141,8 +149,9 @@ TEST_P(BinaryTest, MatchesGmpOnLongRuns) {
   }
 }
 
-// Either operand position can reuse the heap allocation, with either sign.
-// AND uses -1, so that the result remains on the heap.
+// Either operand position can reuse the heap allocation, with either sign,
+// unless the result is immediate, as a monus that stops at zero is. AND uses
+// -1, so that the result remains on the heap.
 TEST_P(BinaryTest, ReusesHeapOperand) {
   long small = op == Operator::bitwiseAnd ? -1 : 3;
   Integer rhs(small);
@@ -151,13 +160,15 @@ TEST_P(BinaryTest, ReusesHeapOperand) {
     if (negative)
       lhs = -lhs;
     for (bool reverse : {false, true}) {
+      Integer value = reverse ? expected(rhs, lhs) : expected(lhs, rhs);
+      if (value.fitsImmediate())
+        continue;
       void *x = toRuntime(lhs), *y = Handle::immediate(small).pointer();
       AllocationCounter counter;
       void *result = reverse ? apply(y, x) : apply(x, y);
       EXPECT_EQ(result, x);
       EXPECT_EQ(counter.allocations(), 0u);
-      EXPECT_THAT(result, Represents(reverse ? expected(rhs, lhs)
-                                             : expected(lhs, rhs)));
+      EXPECT_THAT(result, Represents(value));
       rcgmp_mpz_release(result, atomic);
     }
   }

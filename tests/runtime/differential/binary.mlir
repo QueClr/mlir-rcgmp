@@ -16,6 +16,14 @@ func.func @subi_atomic(%x: !rcgmp.mpz<atomic>, %y: !rcgmp.mpz<atomic>) -> !rcgmp
   %r = rcgmp.subi %x, %y : !rcgmp.mpz<atomic>
   return %r : !rcgmp.mpz<atomic>
 }
+func.func @monusi_local(%x: !rcgmp.mpz, %y: !rcgmp.mpz) -> !rcgmp.mpz {
+  %r = rcgmp.monusi %x, %y : !rcgmp.mpz
+  return %r : !rcgmp.mpz
+}
+func.func @monusi_atomic(%x: !rcgmp.mpz<atomic>, %y: !rcgmp.mpz<atomic>) -> !rcgmp.mpz<atomic> {
+  %r = rcgmp.monusi %x, %y : !rcgmp.mpz<atomic>
+  return %r : !rcgmp.mpz<atomic>
+}
 func.func @muli_local(%x: !rcgmp.mpz, %y: !rcgmp.mpz) -> !rcgmp.mpz {
   %r = rcgmp.muli %x, %y : !rcgmp.mpz
   return %r : !rcgmp.mpz

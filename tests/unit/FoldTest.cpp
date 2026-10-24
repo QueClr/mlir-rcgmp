@@ -242,6 +242,7 @@ void FoldsMatchGmp(const std::pair<Integer, Integer> &operands, unsigned amount,
   auto &[x, y] = operands;
   checkBinary<mlir::rcgmp::AddIOp>(x, y, mpz_add);
   checkBinary<mlir::rcgmp::SubIOp>(x, y, mpz_sub);
+  checkBinary<mlir::rcgmp::MonusIOp>(x, y, ::rcgmp::test::gmpMonus);
   checkBinary<mlir::rcgmp::MulIOp>(x, y, mpz_mul);
   checkBinary<mlir::rcgmp::AndIOp>(x, y, mpz_and);
   checkBinary<mlir::rcgmp::OrIOp>(x, y, mpz_ior);

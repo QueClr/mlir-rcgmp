@@ -31,10 +31,13 @@ void *rcgmp_mpz_add(void *lhs, void *rhs, uint32_t reuse);
 void *rcgmp_mpz_add_atomic(void *lhs, void *rhs, uint32_t reuse);
 
 // The same ownership and reuse contract applies to all binary operations.
-// Subtraction and multiplication are exact. Bitwise operations use infinite
-// two's-complement semantics.
+// Subtraction and multiplication are exact, and monus is the difference when
+// positive and zero otherwise. Bitwise operations use infinite two's-complement
+// semantics.
 void *rcgmp_mpz_sub(void *lhs, void *rhs, uint32_t reuse);
 void *rcgmp_mpz_sub_atomic(void *lhs, void *rhs, uint32_t reuse);
+void *rcgmp_mpz_monus(void *lhs, void *rhs, uint32_t reuse);
+void *rcgmp_mpz_monus_atomic(void *lhs, void *rhs, uint32_t reuse);
 void *rcgmp_mpz_mul(void *lhs, void *rhs, uint32_t reuse);
 void *rcgmp_mpz_mul_atomic(void *lhs, void *rhs, uint32_t reuse);
 void *rcgmp_mpz_and(void *lhs, void *rhs, uint32_t reuse);

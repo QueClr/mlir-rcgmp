@@ -139,6 +139,17 @@ OpFoldResult SubIOp::fold(FoldAdaptor adaptor) {
                     });
 }
 
+OpFoldResult MonusIOp::fold(FoldAdaptor adaptor) {
+  return foldBinary(*this, adaptor.getOperands(),
+                    [](const APInt &lhs, const APInt &rhs) {
+                      auto [a, b] = widened(lhs, rhs, 1);
+                      APInt difference = a - b;
+                      if (difference.isNegative())
+                        difference.clearAllBits();
+                      return std::optional(difference);
+                    });
+}
+
 OpFoldResult MulIOp::fold(FoldAdaptor adaptor) {
   return foldBinary(
       *this, adaptor.getOperands(),

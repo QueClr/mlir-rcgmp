@@ -27,6 +27,36 @@ func.func @sub_atomic(%x: !rcgmp.mpz<atomic>, %y: !rcgmp.mpz<atomic>) -> !rcgmp.
   %r = rcgmp.subi %x, %y : !rcgmp.mpz<atomic>
   return %r : !rcgmp.mpz<atomic>
 }
+// The larger tagged operand minus rhs is 4*max(x-y, 0), immediate iff its
+// sign bit is clear.
+// SCF-LABEL: func.func @monus_local
+// SCF: %[[X:.*]] = rcgmp.bridge.mpz.to_bits %arg0
+// SCF: %[[Y:.*]] = rcgmp.bridge.mpz.to_bits %arg1
+// SCF: %[[MAX:.*]] = arith.maxsi %[[X]], %[[Y]]
+// SCF: %[[DIFF:.*]] = arith.subi %[[MAX]], %[[Y]]
+// SCF: %[[FITS:.*]] = arith.cmpi sge, %[[DIFF]], %{{.*}}
+// SCF: arith.andi %[[FITS]]
+// SCF: %[[TAGGED:.*]] = arith.ori %[[DIFF]], %{{.*}}
+// SCF: scf.if
+// SCF-NEXT: rcgmp.bridge.mpz.from_bits %[[TAGGED]]
+// SCF: rcgmp.bridge.mpz.is_unique
+// SCF: func.call @rcgmp_mpz_monus
+// LLVM-LABEL: llvm.func @monus_local
+// LLVM: llvm.intr.smax
+// LLVM: llvm.call @rcgmp_mpz_monus
+func.func @monus_local(%x: !rcgmp.mpz, %y: !rcgmp.mpz) -> !rcgmp.mpz {
+  %r = rcgmp.monusi %x, %y : !rcgmp.mpz
+  return %r : !rcgmp.mpz
+}
+// SCF-LABEL: func.func @monus_atomic
+// SCF: func.call @rcgmp_mpz_monus_atomic
+// LLVM-LABEL: llvm.func @monus_atomic
+// LLVM: llvm.load {{.*}} atomic acquire
+// LLVM: llvm.call @rcgmp_mpz_monus_atomic
+func.func @monus_atomic(%x: !rcgmp.mpz<atomic>, %y: !rcgmp.mpz<atomic>) -> !rcgmp.mpz<atomic> {
+  %r = rcgmp.monusi %x, %y : !rcgmp.mpz<atomic>
+  return %r : !rcgmp.mpz<atomic>
+}
 // SCF-LABEL: func.func @mul_local
 // SCF: arith.shrsi
 // SCF: arith.andi

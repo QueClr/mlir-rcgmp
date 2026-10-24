@@ -7,6 +7,24 @@ func.func @subi(%x: !rcgmp.mpz, %y: !rcgmp.mpz) -> !rcgmp.mpz {
   %r = rcgmp.subi %x, %y : !rcgmp.mpz
   return %r : !rcgmp.mpz
 }
+func.func @monusi(%x: !rcgmp.mpz, %y: !rcgmp.mpz) -> !rcgmp.mpz {
+  %r = rcgmp.monusi %x, %y : !rcgmp.mpz
+  return %r : !rcgmp.mpz
+}
+// The same result from a comparison and an exact subtraction.
+func.func @guarded_subi(%x: !rcgmp.mpz, %y: !rcgmp.mpz) -> !rcgmp.mpz {
+  %le = rcgmp.cmpi sle, %x, %y : !rcgmp.mpz
+  %r = scf.if %le -> !rcgmp.mpz {
+    rcgmp.release %x : !rcgmp.mpz
+    rcgmp.release %y : !rcgmp.mpz
+    %zero = rcgmp.constant 0 : !rcgmp.mpz
+    scf.yield %zero : !rcgmp.mpz
+  } else {
+    %d = rcgmp.subi %x, %y : !rcgmp.mpz
+    scf.yield %d : !rcgmp.mpz
+  }
+  return %r : !rcgmp.mpz
+}
 func.func @muli(%x: !rcgmp.mpz, %y: !rcgmp.mpz) -> !rcgmp.mpz {
   %r = rcgmp.muli %x, %y : !rcgmp.mpz
   return %r : !rcgmp.mpz
@@ -58,6 +76,10 @@ func.func @addi_atomic(%x: !rcgmp.mpz<atomic>, %y: !rcgmp.mpz<atomic>) -> !rcgmp
 }
 func.func @subi_atomic(%x: !rcgmp.mpz<atomic>, %y: !rcgmp.mpz<atomic>) -> !rcgmp.mpz<atomic> {
   %r = rcgmp.subi %x, %y : !rcgmp.mpz<atomic>
+  return %r : !rcgmp.mpz<atomic>
+}
+func.func @monusi_atomic(%x: !rcgmp.mpz<atomic>, %y: !rcgmp.mpz<atomic>) -> !rcgmp.mpz<atomic> {
+  %r = rcgmp.monusi %x, %y : !rcgmp.mpz<atomic>
   return %r : !rcgmp.mpz<atomic>
 }
 func.func @muli_atomic(%x: !rcgmp.mpz<atomic>, %y: !rcgmp.mpz<atomic>) -> !rcgmp.mpz<atomic> {

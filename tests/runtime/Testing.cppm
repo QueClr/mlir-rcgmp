@@ -133,6 +133,14 @@ private:
 using Oracle = void (*)(mpz_ptr, mpz_srcptr, mpz_srcptr);
 using UnaryOracle = void (*)(mpz_ptr, mpz_srcptr);
 
+// lhs - rhs, or zero when that is negative.
+void gmpMonus(mpz_ptr result, mpz_srcptr lhs, mpz_srcptr rhs) {
+  if (mpz_cmp(lhs, rhs) > 0)
+    mpz_sub(result, lhs, rhs);
+  else
+    mpz_set_ui(result, 0);
+}
+
 // The canonical runtime integer for value. The result owns one reference.
 void *toRuntime(const Integer &value) {
   return fromWords(value.words(), value.negative()).pointer();

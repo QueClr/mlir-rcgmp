@@ -47,8 +47,11 @@ Handle addSmall(Handle heap, bool reuse, bool negative, Limb small,
   return Handle(result);
 }
 
-template <Counting counting, bool subtracting>
+// With clamped, a negative result is replaced by zero, which is known from the
+// signs and magnitudes before any limb is computed.
+template <Counting counting, bool subtracting, bool clamped = false>
 Handle addOrSubtract(Handle lhs, Handle rhs, Reuse reuse) {
+  Handle zero = Handle::immediate(0);
   // A heap integer and a nonzero immediate, as in arithmetic with small
   // constants.
   if (lhs.isImmediate() != rhs.isImmediate()) {
@@ -56,9 +59,11 @@ Handle addOrSubtract(Handle lhs, Handle rhs, Reuse reuse) {
     std::intptr_t small = (heapIsLhs ? rhs : lhs).value();
     if (small) {
       Handle heap = heapIsLhs ? lhs : rhs;
+      bool negative = heap.heap().negative() != (subtracting && !heapIsLhs);
+      if (clamped && negative)
+        return consume<counting>(lhs, rhs, zero);
       return addSmall<counting>(
-          heap, heapIsLhs ? reuse.lhs : reuse.rhs,
-          heap.heap().negative() != (subtracting && !heapIsLhs),
+          heap, heapIsLhs ? reuse.lhs : reuse.rhs, negative,
           small < 0 ? -static_cast<Limb>(small) : static_cast<Limb>(small),
           (small < 0) != (subtracting && heapIsLhs));
     }
@@ -69,7 +74,7 @@ Handle addOrSubtract(Handle lhs, Handle rhs, Reuse reuse) {
   if (!left.count() && !subtracting)
     return rhs; // The consumed zero has no reference count.
   if (!right.count())
-    return lhs;
+    return clamped && left.negative ? consume<counting>(lhs, rhs, zero) : lhs;
 
   // The larger magnitude leads both addition and subtraction. Alias the views,
   // not their storage: immediate limbs refer to the views themselves.
@@ -78,9 +83,12 @@ Handle addOrSubtract(Handle lhs, Handle rhs, Reuse reuse) {
   if (!sameSign && order == 0)
     order = mpn_cmp(left.limbs.data(), right.limbs.data(), left.count()) <=> 0;
   if (!sameSign && order == 0)
-    return consume<counting>(lhs, rhs, Handle::immediate(0));
+    return consume<counting>(lhs, rhs, zero);
   Magnitude &a = order < 0 ? right : left;
   Magnitude &b = order < 0 ? left : right;
+  // A nonzero result has the sign of the larger magnitude.
+  if (clamped && a.negative)
+    return consume<counting>(lhs, rhs, zero);
 
   if (a.count() == 1 && lhs.isImmediate() && rhs.isImmediate()) {
     // The sum or difference of two signed W-2-bit payloads fits intptr_t.
@@ -132,6 +140,12 @@ Handle subtract(Handle lhs, Handle rhs, Reuse reuse) {
   return addOrSubtract<counting, true>(lhs, rhs, reuse);
 }
 
+// lhs minus rhs, or zero when lhs is not greater than rhs.
+export template <Counting counting>
+Handle monus(Handle lhs, Handle rhs, Reuse reuse) {
+  return addOrSubtract<counting, true, true>(lhs, rhs, reuse);
+}
+
 } // namespace rcgmp
 
 extern "C" {
@@ -153,6 +167,16 @@ void *rcgmp_mpz_sub(void *lhs, void *rhs, std::uint32_t reuse) {
 
 void *rcgmp_mpz_sub_atomic(void *lhs, void *rhs, std::uint32_t reuse) {
   return rcgmp::binaryEntryPoint<rcgmp::subtract<rcgmp::Counting::atomic>>(
+      lhs, rhs, reuse);
+}
+
+void *rcgmp_mpz_monus(void *lhs, void *rhs, std::uint32_t reuse) {
+  return rcgmp::binaryEntryPoint<rcgmp::monus<rcgmp::Counting::nonatomic>>(
+      lhs, rhs, reuse);
+}
+
+void *rcgmp_mpz_monus_atomic(void *lhs, void *rhs, std::uint32_t reuse) {
+  return rcgmp::binaryEntryPoint<rcgmp::monus<rcgmp::Counting::atomic>>(
       lhs, rhs, reuse);
 }
 }

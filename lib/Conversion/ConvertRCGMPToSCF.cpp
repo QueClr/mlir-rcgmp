@@ -178,6 +178,35 @@ struct SubILowering : FastPathLowering<SubILowering> {
   }
 };
 
+struct MonusILowering : FastPathLowering<MonusILowering> {
+  using FastPathLowering::FastPathLowering;
+  using Op = MonusIOp;
+
+  static StringRef getRuntimeName(bool atomic) {
+    return atomic ? "rcgmp_mpz_monus_atomic" : "rcgmp_mpz_monus";
+  }
+
+  static FastPath buildFastPath(PatternRewriter &rewriter, Location loc,
+                                Operation *, ValueRange operands) {
+    Value lhs = operands[0], rhs = operands[1];
+    unsigned width = cast<IntegerType>(lhs.getType()).getWidth();
+    // Tagged immediates order as their values, so the larger minus rhs is
+    // 4*max(x-y, 0). It lies in [0, 2^W), and is immediate iff its sign bit
+    // is clear, which the bounds of the maximum prove for a nonnegative
+    // constant rhs.
+    auto larger = arith::MaxSIOp::create(rewriter, loc, lhs, rhs);
+    auto difference = arith::SubIOp::create(rewriter, loc, larger, rhs);
+    auto zero = arith::ConstantIntOp::create(rewriter, loc, 0, width);
+    auto fits = arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::sge,
+                                      difference, zero);
+    auto valid = arith::AndIOp::create(rewriter, loc, fits,
+                                       allImmediate(rewriter, loc, {lhs, rhs}));
+    auto one = arith::ConstantIntOp::create(rewriter, loc, 1, width);
+    auto tagged = arith::OrIOp::create(rewriter, loc, difference, one);
+    return {{tagged}, valid};
+  }
+};
+
 struct MulILowering : FastPathLowering<MulILowering> {
   using FastPathLowering::FastPathLowering;
   using Op = MulIOp;
@@ -903,21 +932,22 @@ struct ConvertRCGMPToSCFPass
   }
   void runOnOperation() override {
     RewritePatternSet patterns(&getContext());
-    patterns.add<ConstantLowering, ExtSILowering, ExtUILowering, RetainLowering,
-                 ReleaseLowering, AddILowering, SubILowering, MulILowering,
-                 AndILowering, XOrILowering, OrILowering, NotILowering,
-                 NegILowering, AbsILowering, ShLILowering, ShRSILowering,
-                 DivSILowering, RemSILowering, FloorDivSILowering,
-                 FloorModSILowering, DivRemSILowering, FloorDivModSILowering,
-                 CmpILowering, TruncationLowering<TruncIOp>,
-                 TruncationLowering<TruncIOverflowOp>>(&getContext());
+    patterns.add<
+        ConstantLowering, ExtSILowering, ExtUILowering, RetainLowering,
+        ReleaseLowering, AddILowering, SubILowering, MonusILowering,
+        MulILowering, AndILowering, XOrILowering, OrILowering, NotILowering,
+        NegILowering, AbsILowering, ShLILowering, ShRSILowering, DivSILowering,
+        RemSILowering, FloorDivSILowering, FloorModSILowering, DivRemSILowering,
+        FloorDivModSILowering, CmpILowering, TruncationLowering<TruncIOp>,
+        TruncationLowering<TruncIOverflowOp>>(&getContext());
     populateMatchLoweringPatterns(patterns);
     ConversionTarget target(getContext());
-    target.addIllegalOp<ConstantOp, ExtSIOp, ExtUIOp, RetainOp, ReleaseOp,
-                        AddIOp, SubIOp, MulIOp, AndIOp, XOrIOp, OrIOp, NotIOp,
-                        NegIOp, AbsIOp, ShLIOp, ShRSIOp, DivSIOp, RemSIOp,
-                        FloorDivSIOp, FloorModSIOp, DivRemSIOp, FloorDivModSIOp,
-                        CmpIOp, TruncIOp, TruncIOverflowOp, MatchOp, YieldOp>();
+    target
+        .addIllegalOp<ConstantOp, ExtSIOp, ExtUIOp, RetainOp, ReleaseOp, AddIOp,
+                      SubIOp, MonusIOp, MulIOp, AndIOp, XOrIOp, OrIOp, NotIOp,
+                      NegIOp, AbsIOp, ShLIOp, ShRSIOp, DivSIOp, RemSIOp,
+                      FloorDivSIOp, FloorModSIOp, DivRemSIOp, FloorDivModSIOp,
+                      CmpIOp, TruncIOp, TruncIOverflowOp, MatchOp, YieldOp>();
     target.markUnknownOpDynamicallyLegal([](Operation *) { return true; });
     if (failed(applyPartialConversion(getOperation(), target,
                                       std::move(patterns))))

@@ -27,6 +27,21 @@ func.func @arithmetic() -> (!rcgmp.mpz, !rcgmp.mpz, !rcgmp.mpz, !rcgmp.mpz, !rcg
   return %sum, %diff, %square, %and, %xor, %or, %not, %neg, %abs : !rcgmp.mpz, !rcgmp.mpz, !rcgmp.mpz, !rcgmp.mpz, !rcgmp.mpz, !rcgmp.mpz, !rcgmp.mpz, !rcgmp.mpz, !rcgmp.mpz
 }
 
+// Monus stops at zero, beyond any fixed width.
+// CHECK-LABEL: func.func @monus
+// CHECK-DAG: %[[DIFF:.*]] = rcgmp.constant 340282366920938463463374607431768211459 : !rcgmp.mpz
+// CHECK-DAG: %[[ZERO:.*]] = rcgmp.constant 0 : !rcgmp.mpz
+// CHECK: return %[[DIFF]], %[[ZERO]], %[[ZERO]]
+func.func @monus() -> (!rcgmp.mpz, !rcgmp.mpz, !rcgmp.mpz) {
+  %big = rcgmp.constant 340282366920938463463374607431768211456 : !rcgmp.mpz
+  %m3 = rcgmp.constant -3 : !rcgmp.mpz
+  %one = rcgmp.constant 1 : !rcgmp.mpz
+  %diff = rcgmp.monusi %big, %m3 : !rcgmp.mpz
+  %clamped = rcgmp.monusi %m3, %big : !rcgmp.mpz
+  %pred = rcgmp.monusi %m3, %one : !rcgmp.mpz
+  return %diff, %clamped, %pred : !rcgmp.mpz, !rcgmp.mpz, !rcgmp.mpz
+}
+
 // Shift amounts are unsigned; a right shift past the width leaves the sign.
 // CHECK-LABEL: func.func @shifts
 // CHECK-DAG: %[[LEFT:.*]] = rcgmp.constant -4722366482869645213696 : !rcgmp.mpz

@@ -114,6 +114,13 @@ def RCGMP_SubIOp : RCGMP_BinaryOp<"subi", [{
   let summary = "Consume two integer references and produce lhs minus rhs";
 }
 
+def RCGMP_MonusIOp : RCGMP_BinaryOp<"monusi", [{
+    The result is lhs minus rhs when lhs is greater than rhs, and zero
+    otherwise, which is the subtraction of natural numbers.
+  }]> {
+  let summary = "Consume two integer references and produce lhs minus rhs, at least zero";
+}
+
 def RCGMP_MulIOp : RCGMP_BinaryOp<"muli", [{
     Multiplication is exact, with no fixed-width overflow.
   }], [Commutative]> {

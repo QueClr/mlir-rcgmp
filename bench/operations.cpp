@@ -11,6 +11,7 @@
 #include <array>
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <tuple>
 #include <utility>
 
@@ -20,6 +21,7 @@ extern "C" {
   result name##_atomic(__VA_ARGS__);
 RCGMP_ENTRY(void *, addi, void *, void *)
 RCGMP_ENTRY(void *, subi, void *, void *)
+RCGMP_ENTRY(void *, monusi, void *, void *)
 RCGMP_ENTRY(void *, muli, void *, void *)
 RCGMP_ENTRY(void *, andi, void *, void *)
 RCGMP_ENTRY(void *, ori, void *, void *)
@@ -34,6 +36,7 @@ RCGMP_ENTRY(void *, extsi, std::int64_t)
 RCGMP_ENTRY(void *, retain, void *)
 RCGMP_ENTRY(void, release, void *)
 #undef RCGMP_ENTRY
+void *guarded_subi(void *, void *);
 std::int64_t successor(void *);
 std::int64_t int_cases(void *);
 std::int64_t int_cases_noti(void *);
@@ -136,6 +139,14 @@ void gmpBinaryInPlace(benchmark::State &state, GmpBinary op,
   }
 }
 
+// lhs - rhs when positive, and zero otherwise, as GMP code computes it.
+void gmpMonus(mpz_ptr result, mpz_srcptr lhs, mpz_srcptr rhs) {
+  if (mpz_cmp(lhs, rhs) > 0)
+    mpz_sub(result, lhs, rhs);
+  else
+    mpz_set_ui(result, 0);
+}
+
 struct BinaryCase {
   const char *name;
   std::array<Binary, 2> compiled;
@@ -144,9 +155,10 @@ struct BinaryCase {
   std::intptr_t first, second;
 };
 
-const std::array<BinaryCase, 6> binaries{{
+const std::array<BinaryCase, 7> binaries{{
     {"addi", {addi, addi_atomic}, mpz_add, smallRhs, -smallRhs},
     {"subi", {subi, subi_atomic}, mpz_sub, smallRhs, -smallRhs},
+    {"monusi", {monusi, monusi_atomic}, gmpMonus, smallRhs, -smallRhs},
     {"muli", {muli, muli_atomic}, mpz_mul, -1, -1},
     {"andi", {andi, andi_atomic}, mpz_and, -2, -2},
     {"ori", {ori, ori_atomic}, mpz_ior, 1, 1},
@@ -264,6 +276,55 @@ void registerUnaries() {
                                      benchmark::DoNotOptimize(x.value);
                                    }
                                  });
+  }
+}
+
+// Monus whose result is zero, which the binary benchmarks do not reach, and
+// the comparison and exact subtraction that compute monus otherwise, with
+// nonatomic counting only. Immediates are not retained, as in the binary
+// benchmarks.
+void registerMonus() {
+  static Integer smallX(smallLhs), smallY(smallRhs), heapX(lhsWords),
+      heapY(rhsWords);
+  struct MonusCase {
+    const char *label;
+    // Whether the result is zero, and the binary benchmarks lack the case.
+    bool zero;
+    void *(*lhs)(), *(*rhs)();
+    mpz_srcptr gmpLhs, gmpRhs;
+  };
+  const std::array<MonusCase, 5> cases{{
+      {"/immediates", false, [] { return immediate(smallLhs); },
+       [] { return immediate(smallRhs); }, smallX.value, smallY.value},
+      {"/immediates, zero", true, [] { return immediate(smallRhs); },
+       [] { return immediate(smallLhs); }, smallY.value, smallX.value},
+      {"/shared heap, immediate", false, [] { return heap(lhsWords); },
+       [] { return immediate(smallRhs); }, heapX.value, smallY.value},
+      {"/shared heaps", false, [] { return heap(lhsWords); },
+       [] { return heap(rhsWords); }, heapX.value, heapY.value},
+      {"/shared heaps, zero", true, [] { return heap(rhsWords); },
+       [] { return heap(lhsWords); }, heapY.value, heapX.value},
+  }};
+  for (const MonusCase &test : cases) {
+    bool immediates = std::string_view(test.label).starts_with("/immediates");
+    for (auto [name, op] :
+         {std::pair{"monusi", monusi}, {"guarded subi", guarded_subi}}) {
+      if (op == monusi && !test.zero)
+        continue;
+      Counted counted = countings[0];
+      counted.binary = op;
+      benchmark::RegisterBenchmark(
+          std::string(name) + test.label, [=](benchmark::State &state) {
+            if (immediates)
+              binary(state, op, test.lhs(), test.rhs());
+            else
+              binaryShared(state, counted, test.lhs(), test.rhs());
+          });
+    }
+    if (test.zero)
+      benchmark::RegisterBenchmark(std::string("gmp monusi") + test.label,
+                                   gmpBinary, gmpMonus, test.gmpLhs,
+                                   test.gmpRhs);
   }
 }
 
@@ -588,7 +649,7 @@ void registerOthers() {
 }
 
 [[maybe_unused]] const int registered =
-    (registerBinaries(), registerUnaries(), registerShifts(),
+    (registerBinaries(), registerMonus(), registerUnaries(), registerShifts(),
      registerDivisions(), registerTruncations(), registerOthers(), 0);
 
 } // namespace
