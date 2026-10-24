@@ -208,6 +208,78 @@ func.func @shrsi_atomic(%x: !rcgmp.mpz<atomic>, %n: i64) -> !rcgmp.mpz<atomic> {
   %r = rcgmp.shrsi %x, %n : !rcgmp.mpz<atomic>, i64
   return %r : !rcgmp.mpz<atomic>
 }
+func.func @ipowi(%x: !rcgmp.mpz, %n: i64) -> !rcgmp.mpz {
+  %r = rcgmp.ipowi %x, %n : !rcgmp.mpz, i64
+  return %r : !rcgmp.mpz
+}
+func.func @ipowi_atomic(%x: !rcgmp.mpz<atomic>, %n: i64) -> !rcgmp.mpz<atomic> {
+  %r = rcgmp.ipowi %x, %n : !rcgmp.mpz<atomic>, i64
+  return %r : !rcgmp.mpz<atomic>
+}
+func.func @fifth_ipowi(%x: !rcgmp.mpz) -> !rcgmp.mpz {
+  %n = arith.constant 5 : i64
+  %r = rcgmp.ipowi %x, %n : !rcgmp.mpz, i64
+  return %r : !rcgmp.mpz
+}
+// A power of two, which canonicalization would turn into the shift below.
+func.func @ipowi_two(%n: i64) -> !rcgmp.mpz {
+  %two = rcgmp.constant 2 : !rcgmp.mpz
+  %r = rcgmp.ipowi %two, %n : !rcgmp.mpz, i64
+  return %r : !rcgmp.mpz
+}
+// The forms that compute powers without ipowi: a shift of one for powers of
+// two, products for a fixed exponent, and a loop that squares and multiplies.
+func.func @shli_one(%n: i64) -> !rcgmp.mpz {
+  %one = rcgmp.constant 1 : !rcgmp.mpz
+  %r = rcgmp.shli %one, %n : !rcgmp.mpz, i64
+  return %r : !rcgmp.mpz
+}
+func.func @square_muli(%x: !rcgmp.mpz) -> !rcgmp.mpz {
+  rcgmp.retain %x : !rcgmp.mpz
+  %r = rcgmp.muli %x, %x : !rcgmp.mpz
+  return %r : !rcgmp.mpz
+}
+func.func @fifth_muli(%x: !rcgmp.mpz) -> !rcgmp.mpz {
+  rcgmp.retain %x : !rcgmp.mpz
+  rcgmp.retain %x : !rcgmp.mpz
+  %x2 = rcgmp.muli %x, %x : !rcgmp.mpz
+  rcgmp.retain %x2 : !rcgmp.mpz
+  %x4 = rcgmp.muli %x2, %x2 : !rcgmp.mpz
+  %r = rcgmp.muli %x4, %x : !rcgmp.mpz
+  return %r : !rcgmp.mpz
+}
+func.func @power_loop(%x: !rcgmp.mpz, %n: i64) -> !rcgmp.mpz {
+  %one = rcgmp.constant 1 : !rcgmp.mpz
+  %c0 = arith.constant 0 : i64
+  %c1 = arith.constant 1 : i64
+  %r:3 = scf.while (%acc = %one, %base = %x, %k = %n) : (!rcgmp.mpz, !rcgmp.mpz, i64) -> (!rcgmp.mpz, !rcgmp.mpz, i64) {
+    %more = arith.cmpi ne, %k, %c0 : i64
+    scf.condition(%more) %acc, %base, %k : !rcgmp.mpz, !rcgmp.mpz, i64
+  } do {
+  ^bb0(%acc: !rcgmp.mpz, %base: !rcgmp.mpz, %k: i64):
+    %bit = arith.andi %k, %c1 : i64
+    %odd = arith.cmpi ne, %bit, %c0 : i64
+    %product = scf.if %odd -> !rcgmp.mpz {
+      rcgmp.retain %base : !rcgmp.mpz
+      %p = rcgmp.muli %acc, %base : !rcgmp.mpz
+      scf.yield %p : !rcgmp.mpz
+    } else {
+      scf.yield %acc : !rcgmp.mpz
+    }
+    %rest = arith.shrui %k, %c1 : i64
+    %done = arith.cmpi eq, %rest, %c0 : i64
+    %square = scf.if %done -> !rcgmp.mpz {
+      scf.yield %base : !rcgmp.mpz
+    } else {
+      rcgmp.retain %base : !rcgmp.mpz
+      %s = rcgmp.muli %base, %base : !rcgmp.mpz
+      scf.yield %s : !rcgmp.mpz
+    }
+    scf.yield %product, %square, %rest : !rcgmp.mpz, !rcgmp.mpz, i64
+  }
+  rcgmp.release %r#1 : !rcgmp.mpz
+  return %r#0 : !rcgmp.mpz
+}
 func.func @divsi(%x: !rcgmp.mpz, %y: !rcgmp.mpz) -> !rcgmp.mpz {
   %r = rcgmp.divsi %x, %y : !rcgmp.mpz
   return %r : !rcgmp.mpz

@@ -224,6 +224,33 @@ def RCGMP_ShRSIOp : RCGMP_ShiftOp<"shrsi", [{
   let summary = "Consume an integer reference and shift it right arithmetically";
 }
 
+def RCGMP_IPowIOp : RCGMPOp<"ipowi", [AllTypesMatch<["base", "result"]>,
+                                       RCGMP_NotSpeculatable]> {
+  let summary = "Consume an integer reference and raise it to a power";
+  let description = [{
+    The base consumes one owned reference, and the result owns one reference.
+    A uniquely owned base may supply result storage; a shared base retains its
+    value. The exponent is an unsigned integer.
+
+    The result is the base to the power of the exponent, exactly. Any base to
+    the power zero is one, zero included. An exponent whose result cannot be
+    allocated terminates the program, like any allocation that fails.
+
+    ```mlir
+    %p = rcgmp.ipowi %x, %n : !rcgmp.mpz, i64
+    ```
+  }];
+  let arguments = (ins
+      Arg<RCGMP_MpzType, "consumed base", RCGMP_ConsumedEffects>:$base,
+      AnySignlessInteger:$exponent);
+  let results = (outs Res<RCGMP_MpzType, "new integer", [MemAlloc]>:$result);
+  let assemblyFormat = [{
+    $base `,` $exponent attr-dict `:` type($result) `,` type($exponent)
+  }];
+  let hasFolder = 1;
+  let hasCanonicalizer = 1;
+}
+
 defvar RCGMP_DivisionArguments = (ins
     Arg<RCGMP_MpzType, "consumed dividend", RCGMP_ConsumedEffects>:$lhs,
     Arg<RCGMP_MpzType, "consumed divisor", RCGMP_ConsumedEffects>:$rhs,

@@ -12,7 +12,10 @@
 #include <mlir/Dialect/SCF/IR/SCF.h>
 #include <mlir/Dialect/UB/IR/UBOps.h>
 #include <mlir/IR/BuiltinOps.h>
+#include <mlir/IR/Matchers.h>
 #include <mlir/Transforms/DialectConversion.h>
+
+#include <bit>
 
 namespace mlir::rcgmp {
 namespace {
@@ -598,6 +601,118 @@ struct ShRSILowering : FastPathLowering<ShRSILowering> {
     auto one = arith::ConstantIntOp::create(rewriter, loc, 1, width);
     auto tagged = arith::OrIOp::create(rewriter, loc, scaled, one);
     return {{tagged}, allImmediate(rewriter, loc, bits)};
+  }
+};
+
+// Exponents are unsigned. One wider than the handle saturates to the largest
+// word of the same parity: only the powers of bases of magnitude at most one
+// can be allocated for such exponents, and they depend on the parity alone.
+Value saturatingExponent(PatternRewriter &rewriter, Location loc,
+                         Value exponent, IntegerType word) {
+  Value saturated = saturatingWord(rewriter, loc, exponent, word);
+  if (cast<IntegerType>(exponent.getType()).getWidth() <= word.getWidth())
+    return saturated;
+  // The saturated word has all bits set, and the low bit of the exponent
+  // keeps the low one.
+  auto low = arith::TruncIOp::create(rewriter, loc, word, exponent);
+  auto high = arith::ConstantIntOp::create(rewriter, loc, -2, word.getWidth());
+  auto parity = arith::OrIOp::create(rewriter, loc, low, high);
+  return arith::AndIOp::create(rewriter, loc, saturated, parity);
+}
+
+struct IPowILowering : FastPathLowering<IPowILowering> {
+  using FastPathLowering::FastPathLowering;
+  using Op = IPowIOp;
+
+  static StringRef getRuntimeName(bool atomic) {
+    return atomic ? "rcgmp_mpz_pow_atomic" : "rcgmp_mpz_pow";
+  }
+
+  static Value buildRuntimeOperand(PatternRewriter &rewriter, Location loc,
+                                   Value exponent, IntegerType word) {
+    return saturatingExponent(rewriter, loc, exponent, word);
+  }
+
+  // A constant exponent from two up to the last at which a base of magnitude
+  // two can have an immediate power unrolls into the products that square and
+  // multiply, left to right. Other exponents take the power one for exponent
+  // zero, the base for odd exponents, and its square for even ones, which
+  // holds for exponents up to two and for bases of magnitude at most one,
+  // whose squares never overflow.
+  static FastPath buildFastPath(PatternRewriter &rewriter, Location loc,
+                                Operation *op, ValueRange operands) {
+    Value bits = operands[0], exponent = operands[1];
+    unsigned width = cast<IntegerType>(bits.getType()).getWidth();
+    APInt value;
+    if (matchPattern(op->getOperand(1), m_ConstantInt(&value)) &&
+        value.uge(2) && value.ule(width - 3))
+      return buildProducts(rewriter, loc, bits, value.getZExtValue());
+    auto constant = [&](int64_t value) -> Value {
+      return arith::ConstantIntOp::create(rewriter, loc, value, width);
+    };
+    // x * (4*x) fits the signed word iff x*x fits the immediate payload, as
+    // for muli.
+    auto x = arith::ShRSIOp::create(rewriter, loc, bits, constant(2));
+    auto scaled = arith::AndIOp::create(rewriter, loc, bits, constant(-4));
+    auto square = bridge::MulSIOverflowOp::create(
+        rewriter, loc, bits.getType(), rewriter.getI1Type(), x, scaled);
+    auto squared =
+        arith::OrIOp::create(rewriter, loc, square.getProduct(), constant(1));
+    auto odd =
+        arith::TruncIOp::create(rewriter, loc, rewriter.getI1Type(), exponent);
+    auto power = arith::SelectOp::create(rewriter, loc, odd, bits, squared);
+    auto zero = arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::eq,
+                                      exponent, constant(0));
+    auto tagged =
+        arith::SelectOp::create(rewriter, loc, zero, constant(5), power);
+    // Of the immediates, 4*x+1 + 3 is 0, 4, or 8 exactly for x in {-1, 0, 1}.
+    auto shifted = arith::AddIOp::create(rewriter, loc, bits, constant(3));
+    auto unit = arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::ule,
+                                      shifted, constant(8));
+    auto low = arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::ule,
+                                     exponent, constant(1));
+    auto two = arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::eq,
+                                     exponent, constant(2));
+    auto yes = arith::ConstantIntOp::create(rewriter, loc, 1, 1);
+    auto fits = arith::XOrIOp::create(rewriter, loc, square.getOverflow(), yes);
+    auto exact = arith::OrIOp::create(
+        rewriter, loc, arith::OrIOp::create(rewriter, loc, low, unit),
+        arith::AndIOp::create(rewriter, loc, two, fits));
+    auto valid = arith::AndIOp::create(rewriter, loc, exact,
+                                       allImmediate(rewriter, loc, bits));
+    return {{tagged}, valid};
+  }
+
+  // Each product of an immediate x and a scaled power 4*y is 4*x*y, which
+  // fits the signed word iff x*y fits the immediate payload, as for muli.
+  static FastPath buildProducts(PatternRewriter &rewriter, Location loc,
+                                Value bits, std::uint64_t exponent) {
+    unsigned width = cast<IntegerType>(bits.getType()).getWidth();
+    auto constant = [&](int64_t value) -> Value {
+      return arith::ConstantIntOp::create(rewriter, loc, value, width);
+    };
+    Value x = arith::ShRSIOp::create(rewriter, loc, bits, constant(2));
+    Value power = arith::AndIOp::create(rewriter, loc, bits, constant(-4));
+    Value overflow;
+    auto multiply = [&](Value lhs) {
+      auto product = bridge::MulSIOverflowOp::create(
+          rewriter, loc, bits.getType(), rewriter.getI1Type(), lhs, power);
+      power = product.getProduct();
+      overflow = overflow ? Value(arith::OrIOp::create(rewriter, loc, overflow,
+                                                       product.getOverflow()))
+                          : product.getOverflow();
+    };
+    for (int bit = std::bit_width(exponent) - 2; bit >= 0; --bit) {
+      multiply(arith::ShRSIOp::create(rewriter, loc, power, constant(2)));
+      if (exponent >> bit & 1)
+        multiply(x);
+    }
+    auto yes = arith::ConstantIntOp::create(rewriter, loc, 1, 1);
+    auto fits = arith::XOrIOp::create(rewriter, loc, overflow, yes);
+    auto valid = arith::AndIOp::create(rewriter, loc, fits,
+                                       allImmediate(rewriter, loc, bits));
+    auto tagged = arith::OrIOp::create(rewriter, loc, power, constant(1));
+    return {{tagged}, valid};
   }
 };
 
@@ -1286,10 +1401,11 @@ struct ConvertRCGMPToSCFPass
                  ReleaseLowering, AddILowering, SubILowering, MonusILowering,
                  MulILowering, GcdILowering, AndILowering, XOrILowering,
                  OrILowering, NotILowering, NegILowering, AbsILowering,
-                 ShLILowering, ShRSILowering, DivSILowering, RemSILowering,
-                 FloorDivSILowering, FloorModSILowering, DivRemSILowering,
-                 FloorDivModSILowering, EDivSILowering, EModSILowering,
-                 EDivModSILowering, CmpILowering, TruncationLowering<TruncIOp>,
+                 ShLILowering, ShRSILowering, IPowILowering, DivSILowering,
+                 RemSILowering, FloorDivSILowering, FloorModSILowering,
+                 DivRemSILowering, FloorDivModSILowering, EDivSILowering,
+                 EModSILowering, EDivModSILowering, CmpILowering,
+                 TruncationLowering<TruncIOp>,
                  TruncationLowering<TruncIOverflowOp>, Log2ILowering>(
         &getContext());
     populateMatchLoweringPatterns(patterns);
@@ -1297,7 +1413,7 @@ struct ConvertRCGMPToSCFPass
     target.addIllegalOp<
         ConstantOp, ExtSIOp, ExtUIOp, RetainOp, ReleaseOp, AddIOp, SubIOp,
         MonusIOp, MulIOp, GcdIOp, AndIOp, XOrIOp, OrIOp, NotIOp, NegIOp, AbsIOp,
-        ShLIOp, ShRSIOp, DivSIOp, RemSIOp, FloorDivSIOp, FloorModSIOp,
+        ShLIOp, ShRSIOp, IPowIOp, DivSIOp, RemSIOp, FloorDivSIOp, FloorModSIOp,
         DivRemSIOp, FloorDivModSIOp, EDivSIOp, EModSIOp, EDivModSIOp, CmpIOp,
         TruncIOp, TruncIOverflowOp, Log2IOp, MatchOp, YieldOp>();
     target.markUnknownOpDynamicallyLegal([](Operation *) { return true; });

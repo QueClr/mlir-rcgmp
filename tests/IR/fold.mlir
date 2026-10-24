@@ -56,6 +56,54 @@ func.func @shifts() -> (!rcgmp.mpz, !rcgmp.mpz) {
   return %left, %right : !rcgmp.mpz, !rcgmp.mpz
 }
 
+// Exponents are unsigned, and the parity of a wide one decides the sign of a
+// power of -1. Any power zero is one, which releases a base that is not
+// constant, and the first power is the base. Powers of one fold for any
+// exponent, and powers of two, but not of -2, become shifts of one. A power of
+// more than 4096 bits stays computed at run time.
+// CHECK-LABEL: func.func @powers
+// CHECK-SAME: (%[[X:.*]]: !rcgmp.mpz, %[[N:.*]]: i64)
+// CHECK-DAG: %[[CUBES:.*]] = rcgmp.constant -46336150792381577588313262263220434371406283602843045997201608143345357543255478647000589718036536507270555180182966478507 : !rcgmp.mpz
+// CHECK-DAG: %[[ONE:.*]] = rcgmp.constant 1 : !rcgmp.mpz
+// CHECK-DAG: %[[M1:.*]] = rcgmp.constant -1 : !rcgmp.mpz
+// CHECK-DAG: %[[ZERO:.*]] = rcgmp.constant 0 : !rcgmp.mpz
+// CHECK-DAG: %[[THREE:.*]] = rcgmp.constant 3 : !rcgmp.mpz
+// CHECK-DAG: %[[LARGE:.*]] = rcgmp.ipowi %[[THREE]], %{{.*}} : !rcgmp.mpz, i64
+// CHECK-DAG: %[[SHIFT:.*]] = rcgmp.shli %[[ONE]], %[[N]] : !rcgmp.mpz, i64
+// CHECK-DAG: %[[MINUS_TWO:.*]] = rcgmp.constant -2 : !rcgmp.mpz
+// CHECK-DAG: %[[SIGNED:.*]] = rcgmp.ipowi %[[MINUS_TWO]], %[[N]] : !rcgmp.mpz, i64
+// CHECK-DAG: rcgmp.release %[[X]]
+// CHECK: return %[[CUBES]], %[[ONE]], %[[M1]], %[[ONE]], %[[ZERO]], %[[ONE]], %[[X]], %[[ONE]], %[[SHIFT]], %[[SIGNED]], %[[LARGE]]
+func.func @powers(%x: !rcgmp.mpz, %n: i64) -> (!rcgmp.mpz, !rcgmp.mpz, !rcgmp.mpz, !rcgmp.mpz, !rcgmp.mpz, !rcgmp.mpz, !rcgmp.mpz, !rcgmp.mpz, !rcgmp.mpz, !rcgmp.mpz, !rcgmp.mpz) {
+  %zero = rcgmp.constant 0 : !rcgmp.mpz
+  %one = rcgmp.constant 1 : !rcgmp.mpz
+  %two = rcgmp.constant 2 : !rcgmp.mpz
+  %m1 = rcgmp.constant -1 : !rcgmp.mpz
+  %m2 = rcgmp.constant -2 : !rcgmp.mpz
+  %m3 = rcgmp.constant -3 : !rcgmp.mpz
+  %three = rcgmp.constant 3 : !rcgmp.mpz
+  %all = arith.constant -1 : i8
+  %even = arith.constant 18446744073709551616 : i128
+  %odd = arith.constant 18446744073709551617 : i128
+  %c0 = arith.constant 0 : i64
+  %c1 = arith.constant 1 : i64
+  %c5 = arith.constant 5 : i64
+  %c2600 = arith.constant 2600 : i64
+  %cubes = rcgmp.ipowi %m3, %all : !rcgmp.mpz, i8
+  %plus = rcgmp.ipowi %m1, %even : !rcgmp.mpz, i128
+  %minus = rcgmp.ipowi %m1, %odd : !rcgmp.mpz, i128
+  %empty = rcgmp.ipowi %zero, %c0 : !rcgmp.mpz, i64
+  %zeros = rcgmp.ipowi %zero, %c5 : !rcgmp.mpz, i64
+  %released = rcgmp.ipowi %x, %c0 : !rcgmp.mpz, i64
+  rcgmp.retain %x : !rcgmp.mpz
+  %first = rcgmp.ipowi %x, %c1 : !rcgmp.mpz, i64
+  %ones = rcgmp.ipowi %one, %n : !rcgmp.mpz, i64
+  %shift = rcgmp.ipowi %two, %n : !rcgmp.mpz, i64
+  %signed = rcgmp.ipowi %m2, %n : !rcgmp.mpz, i64
+  %large = rcgmp.ipowi %three, %c2600 : !rcgmp.mpz, i64
+  return %cubes, %plus, %minus, %empty, %zeros, %released, %first, %ones, %shift, %signed, %large : !rcgmp.mpz, !rcgmp.mpz, !rcgmp.mpz, !rcgmp.mpz, !rcgmp.mpz, !rcgmp.mpz, !rcgmp.mpz, !rcgmp.mpz, !rcgmp.mpz, !rcgmp.mpz, !rcgmp.mpz
+}
+
 // Truncated division rounds toward zero, floored division toward negative
 // infinity, and the minimum by -1 leaves the immediate range exactly.
 // CHECK-LABEL: func.func @division

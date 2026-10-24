@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 import rcgmp.testing;
@@ -146,6 +147,19 @@ void checkShifts(const Integer &x, unsigned amount) {
                                                        folder.mpz(x), bits)[0]),
             right)
       << x << " >> " << amount;
+}
+
+// A power folds exactly when it has at most 4096 significant bits.
+void checkPower(const Integer &x, unsigned exponent) {
+  Folder folder;
+  Integer expected;
+  mpz_pow_ui(expected, x, exponent);
+  std::optional<Integer> folded = mpzValue(folder.fold<mlir::rcgmp::IPowIOp>(
+      folder.mpzType(), folder.mpz(x), folder.integer(APInt(64, exponent)))[0]);
+  if (toAPInt(expected).getSignificantBits() <= 4096)
+    EXPECT_EQ(folded, expected) << x << " to the power " << exponent;
+  else
+    EXPECT_FALSE(folded) << x << " to the power " << exponent << " was folded";
 }
 
 // Every division in each mode. A zero divisor folds only in lean mode, where
@@ -285,6 +299,7 @@ void FoldsMatchGmp(const std::pair<Integer, Integer> &operands, unsigned amount,
   checkUnary<mlir::rcgmp::NegIOp>(x, mpz_neg);
   checkUnary<mlir::rcgmp::AbsIOp>(x, mpz_abs);
   checkShifts(x, amount);
+  checkPower(x, amount);
   checkDivisions(x, y);
   checkComparisons(x, y);
   checkConversions(x, width);
@@ -308,6 +323,23 @@ TEST(Fold, KeepsGcdOfWideOperands) {
   EXPECT_EQ(mpzValue(folder.fold<mlir::rcgmp::GcdIOp>(
                 folder.mpzType(), wide, folder.mpz(Integer(6)))[0]),
             std::nullopt);
+}
+
+// The parity of an exponent wider than 64 bits decides the sign of a power of
+// -1, and other bases of magnitude at least two have powers too large to fold.
+TEST(Fold, FoldsPowersByWideExponents) {
+  Folder folder;
+  APInt even = APInt::getOneBitSet(128, 64);
+  for (auto [base, exponent, expected] : {std::tuple{-1L, even, 1L},
+                                          {-1L, even + 1, -1L},
+                                          {0L, even, 0L},
+                                          {1L, even + 1, 1L}})
+    EXPECT_EQ(mpzValue(folder.fold<mlir::rcgmp::IPowIOp>(
+                  folder.mpzType(), folder.mpz(Integer(base)),
+                  folder.integer(exponent))[0]),
+              Integer(expected));
+  EXPECT_FALSE(mpzValue(folder.fold<mlir::rcgmp::IPowIOp>(
+      folder.mpzType(), folder.mpz(Integer(2)), folder.integer(even))[0]));
 }
 
 } // namespace

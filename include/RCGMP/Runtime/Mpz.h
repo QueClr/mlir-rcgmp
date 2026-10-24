@@ -70,6 +70,11 @@ void *rcgmp_mpz_shl_atomic(void *value, uintptr_t amount, uint32_t reuse);
 void *rcgmp_mpz_shr(void *value, uintptr_t amount, uint32_t reuse);
 void *rcgmp_mpz_shr_atomic(void *value, uintptr_t amount, uint32_t reuse);
 
+// Raise base to the power exponent, with the same ownership and reuse contract
+// as the unary operations. Any base to the power zero is one.
+void *rcgmp_mpz_pow(void *base, uintptr_t exponent, uint32_t reuse);
+void *rcgmp_mpz_pow_atomic(void *base, uintptr_t exponent, uint32_t reuse);
+
 // Divide lhs by rhs, with the same ownership and reuse contract as the binary
 // operations. tdiv rounds the quotient toward zero, giving the remainder the
 // sign of lhs, fdiv rounds it toward negative infinity, giving the remainder

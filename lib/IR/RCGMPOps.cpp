@@ -3,6 +3,7 @@
 #include <llvm/ADT/DenseSet.h>
 #include <llvm/ADT/StringExtras.h>
 #include <mlir/IR/Builders.h>
+#include <mlir/IR/Matchers.h>
 #include <mlir/IR/OpImplementation.h>
 #include <mlir/IR/PatternMatch.h>
 
@@ -277,6 +278,86 @@ OpFoldResult ShRSIOp::fold(FoldAdaptor adaptor) {
     return foldedMpz(getContext(),
                      APInt(1, value->isNegative() ? 1 : 0, /*isSigned=*/false));
   return foldedMpz(getContext(), value->ashr(*amount));
+}
+
+OpFoldResult IPowIOp::fold(FoldAdaptor adaptor) {
+  std::optional<APInt> base = mpzOperand(adaptor.getBase()),
+                       exponent = integerOperand(adaptor.getExponent());
+  // The first power is the base, whose reference becomes the result's.
+  if (exponent && exponent->isOne())
+    return getBase();
+  if (!base)
+    return {};
+  // Every power of one is one. Powers of zero and -1 are themselves, except
+  // for exponent zero and the even powers of -1, which are one.
+  std::optional<std::int64_t> small = base->trySExtValue();
+  APInt one(2, 1);
+  if (small == 1)
+    return foldedMpz(getContext(), one);
+  if (!exponent)
+    return {};
+  if (exponent->isZero() || (small == -1 && !(*exponent)[0]))
+    return foldedMpz(getContext(), one);
+  if (small == 0 || small == -1)
+    return foldedMpz(getContext(), *base);
+  // A magnitude of bits bits, at least two, raised to the power e has more
+  // than (bits - 1) * e bits.
+  std::uint64_t bits =
+      base->sext(base->getBitWidth() + 1).abs().getActiveBits();
+  if (exponent->getActiveBits() > 32 ||
+      (bits - 1) * exponent->getZExtValue() >= maxFoldedBits)
+    return {};
+  std::uint64_t remaining = exponent->getZExtValue();
+  unsigned width = bits * remaining + 1;
+  APInt result(width, 1), power = base->sext(width);
+  for (;;) {
+    if (remaining & 1)
+      result *= power;
+    remaining >>= 1;
+    if (!remaining)
+      break;
+    power *= power;
+  }
+  return foldedMpz(getContext(), result);
+}
+
+namespace {
+
+// Any power zero is one, which needs no reference, so the base is released.
+struct ZeroExponent : OpRewritePattern<IPowIOp> {
+  using OpRewritePattern::OpRewritePattern;
+  LogicalResult matchAndRewrite(IPowIOp op,
+                                PatternRewriter &rewriter) const override {
+    if (!matchPattern(op.getExponent(), m_Zero()))
+      return failure();
+    ReleaseOp::create(rewriter, op.getLoc(), op.getBase());
+    rewriter.replaceOpWithNewOp<ConstantOp>(op, op.getType(), APInt(2, 1));
+    return success();
+  }
+};
+
+// Powers of two are shifts of one, whose inline path covers every immediate
+// power.
+struct PowerOfTwo : OpRewritePattern<IPowIOp> {
+  using OpRewritePattern::OpRewritePattern;
+  LogicalResult matchAndRewrite(IPowIOp op,
+                                PatternRewriter &rewriter) const override {
+    auto base = op.getBase().getDefiningOp<ConstantOp>();
+    if (!base || base.getValue().trySExtValue() != 2)
+      return failure();
+    auto one =
+        ConstantOp::create(rewriter, op.getLoc(), op.getType(), APInt(2, 1));
+    rewriter.replaceOpWithNewOp<ShLIOp>(op, op.getType(), one,
+                                        op.getExponent());
+    return success();
+  }
+};
+
+} // namespace
+
+void IPowIOp::getCanonicalizationPatterns(RewritePatternSet &patterns,
+                                          MLIRContext *context) {
+  patterns.add<ZeroExponent, PowerOfTwo>(context);
 }
 
 namespace {

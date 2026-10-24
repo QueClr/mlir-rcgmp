@@ -103,6 +103,7 @@ rcgmp_native_test(signed-overflow)
 rcgmp_native_test(constant)
 rcgmp_native_test(compare)
 rcgmp_native_test(shift)
+rcgmp_native_test(power)
 rcgmp_native_test(division)
 rcgmp_native_test(log2)
 rcgmp_native_test(gcd)
@@ -115,14 +116,14 @@ add_executable(rcgmp-differential
   runtime/differential/compare.cpp runtime/differential/construction.cpp
   runtime/differential/counting.cpp runtime/differential/division.cpp
   runtime/differential/gcd.cpp runtime/differential/log2.cpp
-  runtime/differential/match.cpp
+  runtime/differential/match.cpp runtime/differential/power.cpp
   runtime/differential/shift.cpp runtime/differential/truncation.cpp
   runtime/differential/unary.cpp
   ${CMAKE_CURRENT_BINARY_DIR}/runtime/compare.o
   ${CMAKE_CURRENT_BINARY_DIR}/runtime/log2.o)
 target_sources(rcgmp-differential PRIVATE FILE_SET CXX_MODULES FILES
   runtime/differential/Differential.cppm)
-foreach(name binary constant counting division extend match shift
+foreach(name binary constant counting division extend match power shift
     truncation unary)
   rcgmp_lower_mlir(runtime/differential/${name}.mlir object)
   target_sources(rcgmp-differential PRIVATE ${object})

@@ -32,12 +32,19 @@ RCGMP_ENTRY(void *, negi, void *)
 RCGMP_ENTRY(void *, absi, void *)
 RCGMP_ENTRY(void *, shli, void *, std::int64_t)
 RCGMP_ENTRY(void *, shrsi, void *, std::int64_t)
+RCGMP_ENTRY(void *, ipowi, void *, std::int64_t)
 RCGMP_ENTRY(std::int32_t, cmpi, void *, void *)
 RCGMP_ENTRY(void *, extsi, std::int64_t)
 RCGMP_ENTRY(void *, retain, void *)
 RCGMP_ENTRY(void, release, void *)
 #undef RCGMP_ENTRY
 void *guarded_subi(void *, void *);
+void *ipowi_two(std::int64_t);
+void *shli_one(std::int64_t);
+void *square_muli(void *);
+void *fifth_muli(void *);
+void *fifth_ipowi(void *);
+void *power_loop(void *, std::int64_t);
 std::int64_t successor(void *);
 std::int64_t int_cases(void *);
 std::int64_t int_cases_noti(void *);
@@ -436,6 +443,115 @@ void registerShifts() {
           benchmark::DoNotOptimize(x.value);
         }
       });
+}
+
+// Powers of immediates on the inline path and in the runtime, and of a shared
+// heap base, next to GMP and to the forms that compute them without ipowi:
+// products for a fixed exponent and a loop that squares and multiplies. Powers
+// of two compare with a shift of one. Results are released, as in the shift
+// benchmarks.
+void registerPowers() {
+  static Integer heapX(lhsWords);
+  struct PowerCase {
+    const char *label;
+    // The immediate base, or zero for the heap base.
+    std::intptr_t base;
+    std::int64_t exponent;
+  };
+  const std::array<PowerCase, 7> cases{{
+      {"/immediate, exponent 2", smallLhs, 2},
+      {"/immediate, exponent 5", 7, 5},
+      {"/immediate, exponent 20", 7, 20},
+      {"/immediate, exponent 50", 3, 50},
+      {"/shared heap, exponent 2", 0, 2},
+      {"/shared heap, exponent 5", 0, 5},
+      {"/shared heap, exponent 20", 0, 20},
+  }};
+  using Power = void *(*)(void *, std::int64_t);
+  auto run = [](benchmark::State &state, Counted counted, Power apply,
+                std::intptr_t base, std::int64_t exponent) {
+    if (base) {
+      void *x = immediate(base);
+      for (auto _ : state) {
+        benchmark::DoNotOptimize(x);
+        counted.release(apply(x, exponent));
+      }
+      return;
+    }
+    void *x = heap(lhsWords);
+    for (auto _ : state) {
+      counted.retain(x);
+      counted.release(apply(x, exponent));
+    }
+    counted.release(x);
+  };
+  for (const PowerCase &test : cases) {
+    for (int counting = 0; counting < 2; ++counting)
+      benchmark::RegisterBenchmark(
+          std::string("ipowi") + suffixes[counting] + test.label,
+          [=](benchmark::State &state) {
+            run(state, countings[counting], counting ? ipowi_atomic : ipowi,
+                test.base, test.exponent);
+          });
+    Power fixed = nullptr;
+    if (test.exponent == 2)
+      fixed = [](void *x, std::int64_t) { return square_muli(x); };
+    else if (test.exponent == 5)
+      fixed = [](void *x, std::int64_t) { return fifth_muli(x); };
+    if (fixed)
+      benchmark::RegisterBenchmark(
+          std::string("muli") + test.label, [=](benchmark::State &state) {
+            run(state, countings[0], fixed, test.base, test.exponent);
+          });
+    // The constant exponent unrolls into products on the inline path.
+    if (test.exponent == 5)
+      benchmark::RegisterBenchmark(
+          std::string("ipowi by constant") + test.label,
+          [=](benchmark::State &state) {
+            run(
+                state, countings[0],
+                [](void *x, std::int64_t) { return fifth_ipowi(x); }, test.base,
+                test.exponent);
+          });
+    benchmark::RegisterBenchmark(
+        std::string("muli loop") + test.label, [=](benchmark::State &state) {
+          run(state, countings[0], power_loop, test.base, test.exponent);
+        });
+    benchmark::RegisterBenchmark(
+        std::string("gmp pow_ui") + test.label, [=](benchmark::State &state) {
+          Integer small(test.base);
+          mpz_srcptr x = test.base ? small.value : heapX.value;
+          for (auto _ : state) {
+            mpz_t result;
+            mpz_init(result);
+            mpz_pow_ui(result, x, test.exponent);
+            benchmark::DoNotOptimize(result);
+            mpz_clear(result);
+          }
+        });
+  }
+  for (std::int64_t exponent : {40, 100}) {
+    std::string label = "/exponent " + std::to_string(exponent);
+    for (auto [name, apply] :
+         {std::pair{"ipowi 2", ipowi_two}, {"shli 1", shli_one}})
+      benchmark::RegisterBenchmark(name + label, [=](benchmark::State &state) {
+        for (auto _ : state) {
+          std::int64_t n = exponent;
+          benchmark::DoNotOptimize(n);
+          release(apply(n));
+        }
+      });
+    benchmark::RegisterBenchmark("gmp ui_pow_ui 2" + label,
+                                 [=](benchmark::State &state) {
+                                   for (auto _ : state) {
+                                     mpz_t result;
+                                     mpz_init(result);
+                                     mpz_ui_pow_ui(result, 2, exponent);
+                                     benchmark::DoNotOptimize(result);
+                                     mpz_clear(result);
+                                   }
+                                 });
+  }
 }
 
 struct DivisionCase {
@@ -885,7 +1001,7 @@ void registerGcd() {
 
 [[maybe_unused]] const int registered =
     (registerBinaries(), registerMonus(), registerUnaries(), registerShifts(),
-     registerDivisions(), registerEuclidean(), registerLean(),
+     registerPowers(), registerDivisions(), registerEuclidean(), registerLean(),
      registerTruncations(), registerLogarithms(), registerOthers(),
      registerGcd(), 0);
 
