@@ -42,7 +42,7 @@ Operation *RCGMPDialect::materializeConstant(OpBuilder &builder,
                                              Location loc) {
   if (auto mpz = dyn_cast<MpzValueAttr>(value); mpz && isa<MpzType>(type))
     return ConstantOp::create(builder, loc, type, mpz.getValue());
-  if (isa<IntegerAttr>(value) && isa<IntegerType>(type))
+  if (isa<IntegerAttr>(value) && isa<IntegerType, IndexType>(type))
     return arith::ConstantOp::materialize(builder, value, type, loc);
   return nullptr;
 }

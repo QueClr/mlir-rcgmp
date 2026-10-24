@@ -566,3 +566,17 @@ func.func @shifted_testbit(%x: !rcgmp.mpz, %n: i64) -> i32 {
   %e = arith.extui %r : i1 to i32
   return %e : i32
 }
+// The whole magnitude, limb by limb, as a hash of it reads it: the count, then
+// every limb, summed so that no read is dead.
+func.func @limb_sum(%x: !rcgmp.mpz) -> i64 {
+  %n = rcgmp.limb_count %x : !rcgmp.mpz
+  %c0 = arith.constant 0 : index
+  %c1 = arith.constant 1 : index
+  %zero = arith.constant 0 : i64
+  %sum = scf.for %i = %c0 to %n step %c1 iter_args(%acc = %zero) -> (i64) {
+    %limb = rcgmp.limb %x[%i] : !rcgmp.mpz to i64
+    %next = arith.addi %acc, %limb : i64
+    scf.yield %next : i64
+  }
+  return %sum : i64
+}

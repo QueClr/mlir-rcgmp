@@ -226,6 +226,39 @@ func.func @bits() -> (i1, i1, i1, i1, i1) {
   return %a, %b, %c, %d, %e : i1, i1, i1, i1, i1
 }
 
+// Limbs are those of the magnitude, and every limb beyond its count, even at
+// an index beyond any count, is zero.
+// CHECK-LABEL: func.func @limbs
+// CHECK-DAG: %[[C0:.*]] = arith.constant 0 : index
+// CHECK-DAG: %[[C1:.*]] = arith.constant 1 : index
+// CHECK-DAG: %[[C3:.*]] = arith.constant 3 : index
+// CHECK-DAG: %[[ZERO:.*]] = arith.constant 0 : i64
+// CHECK-DAG: %[[ONE:.*]] = arith.constant 1 : i64
+// CHECK-DAG: %[[FIVE:.*]] = arith.constant 5 : i64
+// CHECK-DAG: %[[SEVEN:.*]] = arith.constant 7 : i64
+// CHECK: return %[[C3]], %[[C1]], %[[C0]], %[[FIVE]], %[[ZERO]], %[[ONE]], %[[ZERO]], %[[ZERO]], %[[SEVEN]]
+func.func @limbs() -> (index, index, index, i64, i64, i64, i64, i64, i64) {
+  %big = rcgmp.constant -340282366920938463463374607431768211461 : !rcgmp.mpz
+  %small = rcgmp.constant -7 : !rcgmp.mpz
+  %zero = rcgmp.constant 0 : !rcgmp.mpz
+  %c0 = arith.constant 0 : index
+  %c1 = arith.constant 1 : index
+  %c2 = arith.constant 2 : index
+  %c3 = arith.constant 3 : index
+  %huge = arith.constant 1099511627776 : index
+  %a = rcgmp.limb_count %big : !rcgmp.mpz
+  %b = rcgmp.limb_count %small : !rcgmp.mpz
+  %c = rcgmp.limb_count %zero : !rcgmp.mpz
+  %d = rcgmp.limb %big[%c0] : !rcgmp.mpz to i64
+  %e = rcgmp.limb %big[%c1] : !rcgmp.mpz to i64
+  %f = rcgmp.limb %big[%c2] : !rcgmp.mpz to i64
+  %g = rcgmp.limb %big[%c3] : !rcgmp.mpz to i64
+  %h = rcgmp.limb %big[%huge] : !rcgmp.mpz to i64
+  %i = rcgmp.limb %small[%c0] : !rcgmp.mpz to i64
+  return %a, %b, %c, %d, %e, %f, %g, %h, %i
+      : index, index, index, i64, i64, i64, i64, i64, i64
+}
+
 // Constants need no reference counting.
 // CHECK-LABEL: func.func @counting
 // CHECK-NOT: rcgmp.retain

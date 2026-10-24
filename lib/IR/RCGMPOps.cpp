@@ -6,6 +6,7 @@
 #include <mlir/IR/Matchers.h>
 #include <mlir/IR/OpImplementation.h>
 #include <mlir/IR/PatternMatch.h>
+#include <mlir/Interfaces/DataLayoutInterfaces.h>
 
 namespace mlir::rcgmp {
 
@@ -684,6 +685,39 @@ OpFoldResult TestBitIOp::fold(FoldAdaptor adaptor) {
   return BoolAttr::get(getContext(), bit);
 }
 
+// A limb is as wide as the handle of an integer of the given type.
+static unsigned limbWidth(Operation *op, Type type) {
+  return DataLayout::closest(op).getTypeSizeInBits(type).getFixedValue();
+}
+
+// The absolute value of a signed value, one bit wider so that it is exact.
+static APInt magnitude(const APInt &value) {
+  return value.sext(value.getBitWidth() + 1).abs();
+}
+
+OpFoldResult LimbCountOp::fold(FoldAdaptor adaptor) {
+  std::optional<APInt> value = mpzOperand(adaptor.getValue());
+  if (!value)
+    return {};
+  unsigned width = limbWidth(*this, getValue().getType());
+  return IntegerAttr::get(
+      getType(), llvm::divideCeil(magnitude(*value).getActiveBits(), width));
+}
+
+OpFoldResult LimbOp::fold(FoldAdaptor adaptor) {
+  std::optional<APInt> value = mpzOperand(adaptor.getValue());
+  std::optional<APInt> index = integerOperand(adaptor.getIndex());
+  if (!value || !index)
+    return {};
+  unsigned width = cast<IntegerType>(getType()).getWidth();
+  APInt bits = magnitude(*value);
+  // Limbs at or beyond the count are zero.
+  if (index->uge(llvm::divideCeil(bits.getActiveBits(), width)))
+    return IntegerAttr::get(getType(), 0);
+  return IntegerAttr::get(
+      getType(), bits.lshr(index->getZExtValue() * width).zextOrTrunc(width));
+}
+
 // Constants need no reference counting.
 LogicalResult RetainOp::canonicalize(RetainOp op, PatternRewriter &rewriter) {
   if (!op.getValue().getDefiningOp<ConstantOp>())
@@ -859,6 +893,13 @@ void MatchOp::print(OpAsmPrinter &p) {
   p.decreaseIndent();
   p.printNewline();
   p << '}';
+}
+
+LogicalResult LimbOp::verify() {
+  if (cast<IntegerType>(getType()).getWidth() !=
+      limbWidth(*this, getValue().getType()))
+    return emitOpError("requires an integer matching the handle bit width");
+  return success();
 }
 
 LogicalResult MatchOp::verify() {
