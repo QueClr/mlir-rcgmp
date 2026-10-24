@@ -1,4 +1,5 @@
 #include "RCGMP/Analysis/VerifyOwnership.h"
+#include "RCGMP/IR/RCGMPDialect.h"
 #include "RCGMP/IR/RCGMPOps.h"
 #include "RCGMP/IR/RCGMPTypes.h"
 
@@ -6,6 +7,7 @@
 #include <llvm/ADT/STLExtras.h>
 #include <llvm/ADT/SetVector.h>
 #include <mlir/IR/BuiltinOps.h>
+#include <mlir/IR/SymbolTable.h>
 #include <mlir/Interfaces/CallInterfaces.h>
 #include <mlir/Interfaces/ControlFlowInterfaces.h>
 #include <mlir/Interfaces/FunctionInterfaces.h>
@@ -144,10 +146,60 @@ LogicalResult merge(Merge &first, Path path, Operation *from) {
   return diagnostic;
 }
 
-// Checks one function body. Arguments are owned, and returning a value
-// consumes it.
+// The borrowed marker only applies to integer arguments.
+LogicalResult verifyBorrowedTypes(FunctionOpInterface function) {
+  for (auto [index, type] : llvm::enumerate(function.getArgumentTypes()))
+    if (function.getArgAttr(index, RCGMPDialect::getBorrowedAttrName()) &&
+        !isa<MpzType>(type))
+      return function.emitError()
+             << "'" << RCGMPDialect::getBorrowedAttrName() << "' on argument #"
+             << index << " requires an mpz type, but found " << type;
+  return success();
+}
+
+bool borrowsArguments(FunctionOpInterface function) {
+  return llvm::any_of(
+      llvm::seq(function.getNumArguments()), [&](unsigned index) {
+        return function.getArgAttr(index, RCGMPDialect::getBorrowedAttrName());
+      });
+}
+
+// Indirect calls consume every argument, so a function that borrows any of
+// its arguments may only be referenced as the callee of a call.
+LogicalResult verifyBorrowingReferences(Operation *root,
+                                        SymbolTableCollection &symbols) {
+  WalkResult result = root->walk([&](Operation *op) {
+    auto call = dyn_cast<CallOpInterface>(op);
+    auto callee =
+        call ? dyn_cast<SymbolRefAttr>(call.getCallableForCallee()) : nullptr;
+    WalkResult references = op->getAttrDictionary().walk<WalkOrder::PreOrder>(
+        [&](SymbolRefAttr reference) {
+          if (reference == callee)
+            return WalkResult::skip();
+          auto function = dyn_cast_if_present<FunctionOpInterface>(
+              symbols.lookupNearestSymbolFrom(op, reference));
+          if (!function || !borrowsArguments(function))
+            return WalkResult::skip();
+          InFlightDiagnostic diagnostic =
+              op->emitOpError() << "refers to " << reference
+                                << ", which borrows arguments, other than as "
+                                   "the callee of a call";
+          diagnostic.attachNote(function.getLoc()) << "function declared here";
+          return WalkResult::interrupt();
+        });
+    return references.wasInterrupted() ? WalkResult::interrupt()
+                                       : WalkResult::advance();
+  });
+  return failure(result.wasInterrupted());
+}
+
+// Checks one function body. Arguments are owned unless marked borrowed, and
+// returning a value consumes it.
 class FunctionVerifier {
 public:
+  explicit FunctionVerifier(SymbolTableCollection &symbols)
+      : symbols(symbols) {}
+
   LogicalResult verify(FunctionOpInterface function);
 
 private:
@@ -166,16 +218,22 @@ private:
   LogicalResult borrow(const Path &path, OpOperand &operand);
   FailureOr<Path> transfer(Path path, MutableArrayRef<OpOperand> forwarded);
 
-  // Values that hold no reference of their own: results an operation returns
-  // without allocating them. They may be
+  SymbolTableCollection &symbols;
+  // Values that hold no reference of their own: arguments the caller keeps,
+  // and results an operation returns without allocating them. They may be
   // borrowed or retained while live, but consuming one needs a retain first.
   DenseSet<Value> borrowed;
 };
 
 LogicalResult FunctionVerifier::verify(FunctionOpInterface function) {
   Path entry;
-  for (BlockArgument argument : function.getArguments())
-    entry.own(argument);
+  for (BlockArgument argument : function.getArguments()) {
+    if (function.getArgAttr(argument.getArgNumber(),
+                            RCGMPDialect::getBorrowedAttrName()))
+      borrowed.insert(argument);
+    else
+      entry.own(argument);
+  }
   return verifyRegion(function.getFunctionBody(), std::move(entry),
                       [&](Operation *end, Path &path) -> LogicalResult {
                         if (end->hasTrait<OpTrait::ReturnLike>()) {
@@ -286,11 +344,23 @@ LogicalResult FunctionVerifier::verifyOperation(Operation *op,
 }
 
 LogicalResult FunctionVerifier::verifyCall(CallOpInterface call, Path &path) {
+  auto callee = dyn_cast_if_present<FunctionOpInterface>(
+      call.resolveCallableInTable(&symbols));
   MutableArrayRef<OpOperand> arguments = call.getArgOperandsMutable();
   if (failed(checkUnknownOperands(call, arguments)))
     return failure();
-  for (OpOperand &operand : arguments)
-    if (isMpz(operand.get()) && failed(consume(path, operand)))
+  // Consuming first rejects borrowing a reference that the call consumes.
+  SmallVector<OpOperand *> borrows;
+  for (auto [index, operand] : llvm::enumerate(arguments)) {
+    if (!isMpz(operand.get()))
+      continue;
+    if (callee && callee.getArgAttr(index, RCGMPDialect::getBorrowedAttrName()))
+      borrows.push_back(&operand);
+    else if (failed(consume(path, operand)))
+      return failure();
+  }
+  for (OpOperand *operand : borrows)
+    if (failed(borrow(path, *operand)))
       return failure();
   for (Value result : call->getResults())
     path.own(result);
@@ -509,9 +579,12 @@ struct VerifyOwnershipPass
 } // namespace
 
 LogicalResult verifyOwnership(Operation *root) {
-  bool valid = true;
+  SymbolTableCollection symbols;
+  bool valid = succeeded(verifyBorrowingReferences(root, symbols));
   root->walk<WalkOrder::PreOrder>([&](FunctionOpInterface function) {
-    if (!function.isExternal() && failed(FunctionVerifier().verify(function)))
+    if (failed(verifyBorrowedTypes(function)) ||
+        (!function.isExternal() &&
+         failed(FunctionVerifier(symbols).verify(function))))
       valid = false;
     return WalkResult::skip();
   });

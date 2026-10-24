@@ -7,7 +7,7 @@
 // zeros follows, and no runtime function is called.
 // SCF-NOT: func.func private
 // SCF-LABEL: func.func @log2i_local
-// SCF-SAME: (%[[X:.*]]: !rcgmp.mpz)
+// SCF-SAME: (%[[X:[^:]*]]: !rcgmp.mpz {rcgmp.borrowed})
 // SCF: %[[IMMEDIATE:.*]] = rcgmp.bridge.mpz.is_immediate %[[X]]
 // SCF: %[[R:.*]]:2 = scf.if %[[IMMEDIATE]] -> (i64, i64) {
 // SCF: %[[BITS:.*]] = rcgmp.bridge.mpz.to_bits %[[X]]
@@ -40,19 +40,19 @@
 // LLVM: "llvm.intr.ctlz"
 // LLVM-NOT: llvm.call
 // LLVM: llvm.return
-func.func @log2i_local(%x: !rcgmp.mpz) -> i64 {
+func.func @log2i_local(%x: !rcgmp.mpz {rcgmp.borrowed}) -> i64 {
   %r = rcgmp.log2i %x : !rcgmp.mpz to i64
   return %r : i64
 }
-func.func @log2i_atomic(%x: !rcgmp.mpz<atomic>) -> i64 {
+func.func @log2i_atomic(%x: !rcgmp.mpz<atomic> {rcgmp.borrowed}) -> i64 {
   %r = rcgmp.log2i %x : !rcgmp.mpz<atomic> to i64
   return %r : i64
 }
-func.func @log2i_8(%x: !rcgmp.mpz) -> i8 {
+func.func @log2i_8(%x: !rcgmp.mpz {rcgmp.borrowed}) -> i8 {
   %r = rcgmp.log2i %x : !rcgmp.mpz to i8
   return %r : i8
 }
-func.func @log2i_128(%x: !rcgmp.mpz) -> i128 {
+func.func @log2i_128(%x: !rcgmp.mpz {rcgmp.borrowed}) -> i128 {
   %r = rcgmp.log2i %x : !rcgmp.mpz to i128
   return %r : i128
 }

@@ -59,6 +59,14 @@ func.func @leak_retained(%x: !rcgmp.mpz) -> !rcgmp.mpz {
 
 // -----
 
+func.func @consume_borrowed(%x: !rcgmp.mpz {rcgmp.borrowed}) -> !rcgmp.mpz {
+  // expected-error @below {{operand #0 consumes a reference it does not own}}
+  %y = rcgmp.negi %x : !rcgmp.mpz
+  return %y : !rcgmp.mpz
+}
+
+// -----
+
 func.func @leak_in_region(%c: i1, %input: i64) {
   scf.if %c {
     // expected-note @below {{owned value defined here}}
@@ -132,5 +140,25 @@ func.func @match_leaks_arm_argument(%n: !rcgmp.mpz) {
 func.func @unknown_operation(%x: !rcgmp.mpz) {
   // expected-error @below {{cannot determine whether operand #0 is consumed or borrowed}}
   "test.unknown"(%x) : (!rcgmp.mpz) -> ()
+  return
+}
+
+// -----
+
+func.func @reference(%x: !rcgmp.mpz {rcgmp.borrowed}) {
+  return
+}
+
+// expected-note @-4 {{function declared here}}
+func.func @indirect() {
+  // expected-error @below {{refers to @reference, which borrows arguments, other than as the callee of a call}}
+  %f = func.constant @reference : (!rcgmp.mpz) -> ()
+  return
+}
+
+// -----
+
+// expected-error @below {{'rcgmp.borrowed' on argument #0 requires an mpz type, but found 'i64'}}
+func.func @borrowed_integer(%x: i64 {rcgmp.borrowed}) {
   return
 }

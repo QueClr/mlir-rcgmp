@@ -79,8 +79,23 @@ integer operand is rejected. Embedders declare the same effects on their own
 operations.
 
 Functions own their integer arguments, and `func.return` consumes the
-returned values. A call through `func.call` or another call operation
-consumes its integer arguments, and its results own one reference each.
+returned values. A caller keeps its reference to an argument marked
+`rcgmp.borrowed`, which the function may borrow or retain:
+
+```mlir
+func.func @square(%x: !rcgmp.mpz {rcgmp.borrowed}) -> !rcgmp.mpz {
+  rcgmp.retain %x : !rcgmp.mpz
+  rcgmp.retain %x : !rcgmp.mpz
+  %r = rcgmp.muli %x, %x : !rcgmp.mpz
+  return %r : !rcgmp.mpz
+}
+```
+
+A call through `func.call` or another call operation borrows the arguments
+that the callee marks as borrowed and consumes the others, and its results own
+one reference each. Indirect calls consume every argument, so a function with
+borrowed arguments may only be referenced as the callee of a call. The
+attribute only informs the verifier, and lowering leaves it in place.
 
 Control flow is checked through the upstream branch and region interfaces, so
 `cf`, `scf`, and other dialects implementing them are supported. A value
@@ -94,7 +109,8 @@ instead. A path ending in a terminator that never returns, such as
 `llvm.unreachable`, may still own references.
 
 The check applies to IR before `-convert-rcgmp-to-scf`. Embedders can call
-`mlir::rcgmp::verifyOwnership` on their own IR.
+`mlir::rcgmp::verifyOwnership` on their own IR. Every MLIR source in `tests`
+and `bench` that is compiled to native code passes it before lowering.
 
 ## Build
 

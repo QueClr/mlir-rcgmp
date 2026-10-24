@@ -9,7 +9,7 @@
 // SCF-DAG: func.func private @rcgmp_mpz_tstbit(!rcgmp.mpz, i64) -> i32
 // SCF-DAG: func.func private @rcgmp_mpz_tstbit_atomic(!rcgmp.mpz<atomic>, i64) -> i32
 // SCF-LABEL: func.func @testbiti_local
-// SCF-SAME: (%[[X:.*]]: !rcgmp.mpz, %[[N:.*]]: i64)
+// SCF-SAME: (%[[X:[^:]*]]: !rcgmp.mpz {rcgmp.borrowed}, %[[N:.*]]: i64)
 // SCF: %[[BITS:.*]] = rcgmp.bridge.mpz.to_bits %[[X]]
 // SCF: %[[C61:.*]] = arith.constant 61 : i64
 // SCF: %[[SHIFT:.*]] = arith.minui %[[N]], %[[C61]] : i64
@@ -69,22 +69,22 @@
 // LLVM-COUNT-1: llvm.call @rcgmp_mpz_tstbit_atomic
 // LLVM-NOT: llvm.call
 // LLVM: llvm.return
-func.func @testbiti_local(%x: !rcgmp.mpz, %n: i64) -> i32 {
+func.func @testbiti_local(%x: !rcgmp.mpz {rcgmp.borrowed}, %n: i64) -> i32 {
   %r = rcgmp.testbiti %x, %n : !rcgmp.mpz, i64
   %e = arith.extui %r : i1 to i32
   return %e : i32
 }
-func.func @testbiti_atomic(%x: !rcgmp.mpz<atomic>, %n: i64) -> i32 {
+func.func @testbiti_atomic(%x: !rcgmp.mpz<atomic> {rcgmp.borrowed}, %n: i64) -> i32 {
   %r = rcgmp.testbiti %x, %n : !rcgmp.mpz<atomic>, i64
   %e = arith.extui %r : i1 to i32
   return %e : i32
 }
-func.func @testbiti_8(%x: !rcgmp.mpz, %n: i8) -> i32 {
+func.func @testbiti_8(%x: !rcgmp.mpz {rcgmp.borrowed}, %n: i8) -> i32 {
   %r = rcgmp.testbiti %x, %n : !rcgmp.mpz, i8
   %e = arith.extui %r : i1 to i32
   return %e : i32
 }
-func.func @testbiti_128(%x: !rcgmp.mpz, %n: i128) -> i32 {
+func.func @testbiti_128(%x: !rcgmp.mpz {rcgmp.borrowed}, %n: i128) -> i32 {
   %r = rcgmp.testbiti %x, %n : !rcgmp.mpz, i128
   %e = arith.extui %r : i1 to i32
   return %e : i32

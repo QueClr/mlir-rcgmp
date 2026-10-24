@@ -14,12 +14,13 @@ endif()
 
 # Lowers the MLIR file source, relative to the current source directory, to
 # an object file at the same relative path in the binary directory, and sets
-# object to its path. Further arguments are rcgmp-opt passes to run first.
+# object to its path. The source must pass the ownership verifier. Further
+# arguments are rcgmp-opt passes to run before lowering.
 function(rcgmp_lower_mlir source object)
   string(REGEX REPLACE "\\.mlir$" "" base ${CMAKE_CURRENT_BINARY_DIR}/${source})
   add_custom_command(OUTPUT ${base}.o
     COMMAND $<TARGET_FILE:rcgmp-opt> ${CMAKE_CURRENT_SOURCE_DIR}/${source}
-      ${ARGN} -convert-rcgmp-to-scf ${RCGMP_LOWERING_SIMPLIFY}
+      -rcgmp-verify-ownership ${ARGN} -convert-rcgmp-to-scf ${RCGMP_LOWERING_SIMPLIFY}
       -convert-scf-to-cf -convert-to-llvm
       -reconcile-unrealized-casts -o ${base}.mlir
     COMMAND ${RCGMP_MLIR_TRANSLATE} --mlir-to-llvmir ${base}.mlir -o ${base}.ll

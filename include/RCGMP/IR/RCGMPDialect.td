@@ -18,6 +18,12 @@ def RCGMPDialect : Dialect {
   let hasConstantMaterializer = 1;
   let dependentDialects = ["::mlir::LLVM::LLVMDialect",
                            "::mlir::arith::ArithDialect"];
+  let extraClassDeclaration = [{
+    // Marks a function argument whose reference the caller keeps.
+    static constexpr ::llvm::StringLiteral getBorrowedAttrName() {
+      return ::llvm::StringLiteral("rcgmp.borrowed");
+    }
+  }];
 }
 
 #endif

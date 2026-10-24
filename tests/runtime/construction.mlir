@@ -42,14 +42,14 @@ func.func @from_atomic(%x: i64) -> !rcgmp.mpz<atomic> {
 // LLVM: llvm.load
 // LLVM: llvm.add
 // LLVM: llvm.store
-func.func @retain_local(%x: !rcgmp.mpz) -> !rcgmp.mpz {
+func.func @retain_local(%x: !rcgmp.mpz {rcgmp.borrowed}) -> !rcgmp.mpz {
   rcgmp.retain %x : !rcgmp.mpz
   return %x : !rcgmp.mpz
 }
 // LLVM-LABEL: llvm.func @retain_atomic
 // LLVM: llvm.load {{.*}} atomic monotonic
 // LLVM: llvm.atomicrmw add {{.*}} monotonic
-func.func @retain_atomic(%x: !rcgmp.mpz<atomic>) -> !rcgmp.mpz<atomic> {
+func.func @retain_atomic(%x: !rcgmp.mpz<atomic> {rcgmp.borrowed}) -> !rcgmp.mpz<atomic> {
   rcgmp.retain %x : !rcgmp.mpz<atomic>
   return %x : !rcgmp.mpz<atomic>
 }

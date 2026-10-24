@@ -33,15 +33,26 @@ func.func @constants() -> !rcgmp.mpz {
   return %square : !rcgmp.mpz
 }
 
-// Calls consume their arguments and return owned results.
+// A borrowed argument must be retained before a reference to it is consumed.
+// CHECK-LABEL: func.func @borrowed
+func.func @borrowed(%x: !rcgmp.mpz<atomic> {rcgmp.borrowed}) -> !rcgmp.mpz<atomic> {
+  rcgmp.retain %x : !rcgmp.mpz<atomic>
+  rcgmp.retain %x : !rcgmp.mpz<atomic>
+  %r = rcgmp.muli %x, %x : !rcgmp.mpz<atomic>
+  return %r : !rcgmp.mpz<atomic>
+}
+
+// Calls consume their arguments, except those the callee borrows, and return
+// owned results. Borrowing a reference twice does not consume it.
 // CHECK-LABEL: func.func @calls
 func.func @calls(%x: !rcgmp.mpz) -> !rcgmp.mpz {
-  rcgmp.retain %x : !rcgmp.mpz
-  %copy = call @consume_one(%x) : (!rcgmp.mpz) -> !rcgmp.mpz
+  %copy = call @borrow_local(%x) : (!rcgmp.mpz) -> !rcgmp.mpz
+  call @borrow_both(%x, %x) : (!rcgmp.mpz, !rcgmp.mpz) -> ()
   %r = call @consume(%x, %copy) : (!rcgmp.mpz, !rcgmp.mpz) -> !rcgmp.mpz
   return %r : !rcgmp.mpz
 }
-func.func private @consume_one(!rcgmp.mpz) -> !rcgmp.mpz
+func.func private @borrow_local(!rcgmp.mpz {rcgmp.borrowed}) -> !rcgmp.mpz
+func.func private @borrow_both(!rcgmp.mpz {rcgmp.borrowed}, !rcgmp.mpz {rcgmp.borrowed})
 func.func private @consume(!rcgmp.mpz, !rcgmp.mpz) -> !rcgmp.mpz
 
 // Both branches consume the outer references, and each yields a new one.

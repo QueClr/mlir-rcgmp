@@ -53,7 +53,7 @@ func.func @absi(%x: !rcgmp.mpz) -> !rcgmp.mpz {
   %r = rcgmp.absi %x : !rcgmp.mpz
   return %r : !rcgmp.mpz
 }
-func.func @cmpi(%x: !rcgmp.mpz, %y: !rcgmp.mpz) -> i32 {
+func.func @cmpi(%x: !rcgmp.mpz {rcgmp.borrowed}, %y: !rcgmp.mpz {rcgmp.borrowed}) -> i32 {
   %r = rcgmp.cmpi slt, %x, %y : !rcgmp.mpz
   %e = arith.extui %r : i1 to i32
   return %e : i32
@@ -62,7 +62,7 @@ func.func @extsi(%v: i64) -> !rcgmp.mpz {
   %r = rcgmp.extsi %v : i64 to !rcgmp.mpz
   return %r : !rcgmp.mpz
 }
-func.func @retain(%x: !rcgmp.mpz) -> !rcgmp.mpz {
+func.func @retain(%x: !rcgmp.mpz {rcgmp.borrowed}) -> !rcgmp.mpz {
   rcgmp.retain %x : !rcgmp.mpz
   return %x : !rcgmp.mpz
 }
@@ -110,7 +110,7 @@ func.func @absi_atomic(%x: !rcgmp.mpz<atomic>) -> !rcgmp.mpz<atomic> {
   %r = rcgmp.absi %x : !rcgmp.mpz<atomic>
   return %r : !rcgmp.mpz<atomic>
 }
-func.func @cmpi_atomic(%x: !rcgmp.mpz<atomic>, %y: !rcgmp.mpz<atomic>) -> i32 {
+func.func @cmpi_atomic(%x: !rcgmp.mpz<atomic> {rcgmp.borrowed}, %y: !rcgmp.mpz<atomic> {rcgmp.borrowed}) -> i32 {
   %r = rcgmp.cmpi slt, %x, %y : !rcgmp.mpz<atomic>
   %e = arith.extui %r : i1 to i32
   return %e : i32
@@ -119,7 +119,7 @@ func.func @extsi_atomic(%v: i64) -> !rcgmp.mpz<atomic> {
   %r = rcgmp.extsi %v : i64 to !rcgmp.mpz<atomic>
   return %r : !rcgmp.mpz<atomic>
 }
-func.func @retain_atomic(%x: !rcgmp.mpz<atomic>) -> !rcgmp.mpz<atomic> {
+func.func @retain_atomic(%x: !rcgmp.mpz<atomic> {rcgmp.borrowed}) -> !rcgmp.mpz<atomic> {
   rcgmp.retain %x : !rcgmp.mpz<atomic>
   return %x : !rcgmp.mpz<atomic>
 }
@@ -454,24 +454,24 @@ func.func @divremsi(%x: !rcgmp.mpz, %y: !rcgmp.mpz) -> (!rcgmp.mpz, !rcgmp.mpz) 
   %q, %r = rcgmp.divremsi %x, %y : !rcgmp.mpz
   return %q, %r : !rcgmp.mpz, !rcgmp.mpz
 }
-func.func @trunci(%x: !rcgmp.mpz) -> i64 {
+func.func @trunci(%x: !rcgmp.mpz {rcgmp.borrowed}) -> i64 {
   %v = rcgmp.trunci %x : !rcgmp.mpz to i64
   return %v : i64
 }
-func.func @trunci_overflow(%x: !rcgmp.mpz) -> i64 {
+func.func @trunci_overflow(%x: !rcgmp.mpz {rcgmp.borrowed}) -> i64 {
   %v, %o = rcgmp.trunci_overflow %x : !rcgmp.mpz to i64
   %e = arith.extui %o : i1 to i64
   %r = arith.xori %v, %e : i64
   return %r : i64
 }
-func.func @log2i(%x: !rcgmp.mpz) -> i64 {
+func.func @log2i(%x: !rcgmp.mpz {rcgmp.borrowed}) -> i64 {
   %r = rcgmp.log2i %x : !rcgmp.mpz to i64
   return %r : i64
 }
 // The same logarithm of a nonnegative integer without rcgmp.log2i: shift a
 // copy right by a word until it fits one, and count the leading zeros of that
 // word.
-func.func @shifted_trunci_log2(%x: !rcgmp.mpz) -> i64 {
+func.func @shifted_trunci_log2(%x: !rcgmp.mpz {rcgmp.borrowed}) -> i64 {
   %zero = arith.constant 0 : i64
   %one = arith.constant 1 : i64
   %top = arith.constant 63 : i64
@@ -547,7 +547,7 @@ func.func @divsi_by_8(%x: !rcgmp.mpz) -> !rcgmp.mpz {
   %r = rcgmp.divsi %x, %c : !rcgmp.mpz
   return %r : !rcgmp.mpz
 }
-func.func @testbiti(%x: !rcgmp.mpz, %n: i64) -> i32 {
+func.func @testbiti(%x: !rcgmp.mpz {rcgmp.borrowed}, %n: i64) -> i32 {
   %r = rcgmp.testbiti %x, %n : !rcgmp.mpz, i64
   %e = arith.extui %r : i1 to i32
   return %e : i32
@@ -555,7 +555,7 @@ func.func @testbiti(%x: !rcgmp.mpz, %n: i64) -> i32 {
 // The same bit without rcgmp.testbiti, as Lean's Nat.testBit computes it:
 // shift a reference to the integer right, mask the lowest bit, and compare it
 // with zero.
-func.func @shifted_testbit(%x: !rcgmp.mpz, %n: i64) -> i32 {
+func.func @shifted_testbit(%x: !rcgmp.mpz {rcgmp.borrowed}, %n: i64) -> i32 {
   %one = rcgmp.constant 1 : !rcgmp.mpz
   %zero = rcgmp.constant 0 : !rcgmp.mpz
   rcgmp.retain %x : !rcgmp.mpz
