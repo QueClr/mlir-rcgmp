@@ -580,3 +580,8 @@ func.func @limb_sum(%x: !rcgmp.mpz) -> i64 {
   }
   return %sum : i64
 }
+
+func.func @sitofp(%x: !rcgmp.mpz) -> f64 {
+  %f = rcgmp.sitofp %x : !rcgmp.mpz to f64
+  return %f : f64
+}

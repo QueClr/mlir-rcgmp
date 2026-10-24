@@ -165,6 +165,13 @@ size_t rcgmp_mpz_to_decimal(void *value, char *buffer);
 // decimal digits, and returns an integer owning one reference, or null if the
 // bytes have another form. Leading zeros are permitted.
 void *rcgmp_mpz_from_decimal(const char *text, size_t length, uint32_t atomic);
+// Borrow value and round it to the nearest double or float, ties to even, or
+// to an infinity of its sign beyond the largest finite value. Reference counts
+// are unchanged, and both entry points of a type share one implementation.
+double rcgmp_mpz_to_f64(void *value);
+double rcgmp_mpz_to_f64_atomic(void *value);
+float rcgmp_mpz_to_f32(void *value);
+float rcgmp_mpz_to_f32_atomic(void *value);
 
 // Only for a heap value whose final decrement has already completed.
 void rcgmp_mpz_free(void *value, uint32_t atomic);

@@ -83,6 +83,7 @@ std::int64_t shifted_trunci_log2(void *);
 std::int32_t testbiti(void *, std::int64_t);
 std::int32_t shifted_testbit(void *, std::int64_t);
 std::int64_t limb_sum(void *);
+double sitofp(void *);
 void *gcdi(void *, void *);
 void *euclid(void *, void *);
 void *divsi_exact(void *, void *);
@@ -1042,6 +1043,36 @@ void registerLimbs() {
   }
 }
 
+// Rounding borrowed integers to doubles, compared with GMP's truncating
+// mpz_get_d.
+void registerFloating() {
+  for (auto [label, operand] : {
+           std::pair{"/immediate", RemainderOperand{smallLhs}},
+           {"/heap", RemainderOperand{0, lhsWords}},
+       }) {
+    benchmark::RegisterBenchmark(std::string("sitofp") + label,
+                                 [=](benchmark::State &state) {
+                                   void *x = operand.compiled();
+                                   for (auto _ : state) {
+                                     benchmark::DoNotOptimize(x);
+                                     benchmark::DoNotOptimize(sitofp(x));
+                                   }
+                                   rcgmp_mpz_release(x, 0);
+                                 });
+    benchmark::RegisterBenchmark(std::string("gmp get_d") + label,
+                                 [=](benchmark::State &state) {
+                                   mpz_t x;
+                                   mpz_init(x);
+                                   operand.gmp(x);
+                                   for (auto _ : state) {
+                                     benchmark::DoNotOptimize(x);
+                                     benchmark::DoNotOptimize(mpz_get_d(x));
+                                   }
+                                   mpz_clear(x);
+                                 });
+  }
+}
+
 void registerOthers() {
   static Integer smallX(smallLhs), smallY(smallRhs), heapX(lhsWords),
       heapY(rhsWords), five(5);
@@ -1319,7 +1350,7 @@ void registerExactDivisions() {
     (registerBinaries(), registerMonus(), registerUnaries(), registerShifts(),
      registerRemainders(), registerPowers(), registerDivisions(),
      registerEuclidean(), registerLean(), registerTruncations(),
-     registerLogarithms(), registerBits(), registerLimbs(), registerOthers(),
-     registerGcd(), registerExactDivisions(), 0);
+     registerLogarithms(), registerBits(), registerLimbs(), registerFloating(),
+     registerOthers(), registerGcd(), registerExactDivisions(), 0);
 
 } // namespace

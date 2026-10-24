@@ -718,6 +718,17 @@ OpFoldResult LimbOp::fold(FoldAdaptor adaptor) {
       getType(), bits.lshr(index->getZExtValue() * width).zextOrTrunc(width));
 }
 
+OpFoldResult SIToFPOp::fold(FoldAdaptor adaptor) {
+  std::optional<APInt> value = mpzOperand(adaptor.getValue());
+  if (!value)
+    return {};
+  auto type = cast<FloatType>(getType());
+  APFloat result(type.getFloatSemantics());
+  result.convertFromAPInt(*value, /*IsSigned=*/true,
+                          APFloat::rmNearestTiesToEven);
+  return FloatAttr::get(type, result);
+}
+
 // Constants need no reference counting.
 LogicalResult RetainOp::canonicalize(RetainOp op, PatternRewriter &rewriter) {
   if (!op.getValue().getDefiningOp<ConstantOp>())

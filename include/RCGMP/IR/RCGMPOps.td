@@ -575,6 +575,25 @@ def RCGMP_LimbOp : RCGMPOp<"limb", [RCGMP_NotSpeculatable]> {
   let hasVerifier = 1;
 }
 
+def RCGMP_SIToFPOp : RCGMPOp<"sitofp", [RCGMP_NotSpeculatable]> {
+  let summary = "Round a borrowed integer to a floating-point value";
+  let description = [{
+    The result is the integer rounded to the nearest value of the result type,
+    ties to even, as `arith.sitofp` rounds a fixed-width integer and as Lean's
+    `Float.ofNat` and `Float.ofInt` define it. An integer beyond the largest
+    finite value rounds to an infinity of its sign. The operand is borrowed, as
+    by `rcgmp.cmpi`.
+
+    ```mlir
+    %f = rcgmp.sitofp %x : !rcgmp.mpz to f64
+    ```
+  }];
+  let arguments = (ins Arg<RCGMP_MpzType, "borrowed integer", [MemRead]>:$value);
+  let results = (outs AnyTypeOf<[F32, F64]>:$result);
+  let assemblyFormat = "$value attr-dict `:` type($value) `to` type($result)";
+  let hasFolder = 1;
+}
+
 def RCGMP_MatchOp : RCGMPOp<"match", [RCGMP_NotSpeculatable,
     RecursiveMemoryEffects, SingleBlockImplicitTerminator<"YieldOp">,
     DeclareOpInterfaceMethods<RegionBranchOpInterface, ["getSuccessorInputs"]>]> {
