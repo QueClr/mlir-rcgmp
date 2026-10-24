@@ -1,5 +1,4 @@
-// Compiled rounding to floating-point values, compared with exact GMP
-// arithmetic.
+// Compiled floating-point conversions compared with exact GMP arithmetic.
 #include "RCGMP/Runtime/Mpz.h"
 #include <fuzztest/fuzztest.h>
 #include <gmock/gmock.h>
@@ -24,6 +23,9 @@ double sitofp_f64_local(void *);
 double sitofp_f64_atomic(void *);
 float sitofp_f32_local(void *);
 float sitofp_f32_atomic(void *);
+void *fptosi_f64_local(double);
+void *fptosi_f64_atomic(double);
+void *fptosi_f32_local(float);
 }
 
 namespace {
@@ -135,6 +137,55 @@ TEST(Floating, RoundsOnBoundaries) {
   void *beyond = toRuntime(-Integer::powerOfTwo(1024));
   EXPECT_EQ(sitofp_f64_local(beyond), -std::numeric_limits<double>::infinity());
   rcgmp_mpz_release(beyond, 0);
+}
+
+// Truncation is exact for every finite value.
+void checkTruncation(double value, Counting counting) {
+  bool atomic = counting == Counting::atomic;
+  void *x = (atomic ? fptosi_f64_atomic : fptosi_f64_local)(value);
+  EXPECT_THAT(x, Represents(exact(std::trunc(value)))) << value;
+  if (!Handle(x).isImmediate())
+    EXPECT_EQ(references(x, counting), 1u);
+  rcgmp_mpz_release(x, atomic);
+}
+
+void TruncatesExactly(double value, Counting counting) {
+  checkTruncation(value, counting);
+}
+FUZZ_TEST(Floating, TruncatesExactly)
+    .WithDomains(
+        fuzztest::Filter([](double value) { return std::isfinite(value); },
+                         fuzztest::Arbitrary<double>()),
+        AnyCounting());
+
+void TruncatesSinglePrecision(float value) {
+  void *x = fptosi_f32_local(value);
+  EXPECT_THAT(x, Represents(exact(std::trunc(value)))) << value;
+  rcgmp_mpz_release(x, 0);
+}
+FUZZ_TEST(Floating, TruncatesSinglePrecision)
+    .WithDomains(
+        fuzztest::Filter([](float value) { return std::isfinite(value); },
+                         fuzztest::Arbitrary<float>()));
+
+// Signed zeros, fractions, the immediate bound, the largest finite values,
+// and the smallest subnormal.
+TEST(Floating, TruncatesOnBoundaries) {
+  double bound = std::ldexp(1.0, GMP_NUMB_BITS - 3);
+  for (double value :
+       {0.0, -0.0, 0.5, -0.99, 2.5, -2.5, bound, -bound,
+        std::nextafter(bound, 0.0), -std::nextafter(bound, 0.0), 0x1p63, 0x1p64,
+        std::numeric_limits<double>::max(), -std::numeric_limits<double>::max(),
+        std::numeric_limits<double>::denorm_min()})
+    for (Counting counting : countings)
+      checkTruncation(value, counting);
+}
+
+// A NaN or an infinity has no integer value.
+TEST(Floating, RejectsNonFiniteValues) {
+  EXPECT_DEATH(fptosi_f64_local(std::numeric_limits<double>::quiet_NaN()), "");
+  EXPECT_DEATH(fptosi_f64_atomic(std::numeric_limits<double>::infinity()), "");
+  EXPECT_DEATH(fptosi_f32_local(-std::numeric_limits<float>::infinity()), "");
 }
 
 } // namespace

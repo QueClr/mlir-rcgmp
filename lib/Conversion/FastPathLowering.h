@@ -54,6 +54,27 @@ struct FastPath {
 //   operand before the fast path and the runtime receive it, such as to the
 //   handle-width word type, so that the runtime signature does not depend on
 //   the operand's type.
+// The runtime function name with the given signature, declared in the module
+// of op unless it already is, or failure if the module declares the name
+// otherwise.
+inline FailureOr<func::FuncOp> lookupOrDeclareRuntime(PatternRewriter &rewriter,
+                                                      Operation *op,
+                                                      StringRef name,
+                                                      FunctionType signature) {
+  auto module = op->getParentOfType<ModuleOp>();
+  if (Operation *existing = module.lookupSymbol(name)) {
+    auto function = dyn_cast<func::FuncOp>(existing);
+    if (!function || function.getFunctionType() != signature)
+      return failure();
+    return function;
+  }
+  OpBuilder::InsertionGuard guard(rewriter);
+  rewriter.setInsertionPointToStart(module.getBody());
+  auto function = func::FuncOp::create(rewriter, op->getLoc(), name, signature);
+  function.setPrivate();
+  return function;
+}
+
 template <typename Derived> struct FastPathLowering : RewritePattern {
   explicit FastPathLowering(MLIRContext *context)
       : RewritePattern(Derived::getOperationName(), 1, context) {}
@@ -121,19 +142,12 @@ template <typename Derived> struct FastPathLowering : RewritePattern {
     if (single)
       resultTypes.front() = Derived::getRuntimeResultType(op);
     auto signature = rewriter.getFunctionType(argumentTypes, resultTypes);
-    StringRef name = Derived::getRuntimeSymbol(op, type.getAtomic());
-    auto module = op->getParentOfType<ModuleOp>();
-    auto function = module.lookupSymbol<func::FuncOp>(name);
-    if (module.lookupSymbol(name)) {
-      if (!function || function.getFunctionType() != signature)
-        return rewriter.notifyMatchFailure(op,
-                                           "incompatible runtime declaration");
-    } else {
-      OpBuilder::InsertionGuard guard(rewriter);
-      rewriter.setInsertionPointToStart(module.getBody());
-      function = func::FuncOp::create(rewriter, loc, name, signature);
-      function.setPrivate();
-    }
+    FailureOr<func::FuncOp> function = lookupOrDeclareRuntime(
+        rewriter, op, Derived::getRuntimeSymbol(op, type.getAtomic()),
+        signature);
+    if (failed(function))
+      return rewriter.notifyMatchFailure(op,
+                                         "incompatible runtime declaration");
 
     SmallVector<Value> handles, operands;
     for (Value operand : arguments) {
@@ -166,7 +180,7 @@ template <typename Derived> struct FastPathLowering : RewritePattern {
       SmallVector<Value> callArguments(arguments);
       if (passReuse)
         callArguments.push_back(reuseMask(rewriter, loc, handles));
-      return func::CallOp::create(rewriter, loc, function, callArguments);
+      return func::CallOp::create(rewriter, loc, *function, callArguments);
     };
     if (single)
       scf::YieldOp::create(rewriter, loc,

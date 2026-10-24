@@ -172,6 +172,10 @@ double rcgmp_mpz_to_f64(void *value);
 double rcgmp_mpz_to_f64_atomic(void *value);
 float rcgmp_mpz_to_f32(void *value);
 float rcgmp_mpz_to_f32_atomic(void *value);
+// The integer value truncates to, owning one reference. A NaN or an infinity
+// terminates the program.
+void *rcgmp_mpz_from_f64(double value);
+void *rcgmp_mpz_from_f64_atomic(double value);
 
 // Only for a heap value whose final decrement has already completed.
 void rcgmp_mpz_free(void *value, uint32_t atomic);

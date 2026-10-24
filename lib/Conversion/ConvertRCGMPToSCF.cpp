@@ -16,6 +16,7 @@
 #include <mlir/Transforms/DialectConversion.h>
 
 #include <bit>
+#include <cmath>
 
 namespace mlir::rcgmp {
 namespace {
@@ -1611,6 +1612,58 @@ struct SIToFPLowering : FastPathLowering<SIToFPLowering> {
   }
 };
 
+// Lowers rcgmp.fptosi. A value whose magnitude is below the immediate bound
+// 2^(W-3), W the handle width, truncates to an immediate inline; the runtime
+// truncates any other, terminating on a NaN or an infinity, which fail the
+// comparison.
+struct FPToSILowering : OpRewritePattern<FPToSIOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(FPToSIOp op,
+                                PatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto type = op.getType();
+    unsigned width =
+        DataLayout::closest(op).getTypeSizeInBits(type).getFixedValue();
+    auto word = rewriter.getIntegerType(width);
+    auto f64 = rewriter.getF64Type();
+    Value value = op.getValue();
+    if (value.getType() != f64)
+      value = arith::ExtFOp::create(rewriter, loc, f64, value);
+    StringRef name =
+        type.getAtomic() ? "rcgmp_mpz_from_f64_atomic" : "rcgmp_mpz_from_f64";
+    FailureOr<func::FuncOp> runtime = lookupOrDeclareRuntime(
+        rewriter, op, name, rewriter.getFunctionType({f64}, {type}));
+    if (failed(runtime))
+      return rewriter.notifyMatchFailure(op,
+                                         "incompatible runtime declaration");
+    auto bound = arith::ConstantOp::create(
+        rewriter, loc, rewriter.getF64FloatAttr(std::ldexp(1.0, width - 3)));
+    auto magnitude = math::AbsFOp::create(rewriter, loc, value);
+    auto small = arith::CmpFOp::create(rewriter, loc, arith::CmpFPredicate::OLT,
+                                       magnitude, bound);
+    auto branch = scf::IfOp::create(rewriter, loc, TypeRange{type}, small,
+                                    /*withElseRegion=*/true);
+    rewriter.setInsertionPointToStart(&branch.getThenRegion().front());
+    Value integer = arith::FPToSIOp::create(rewriter, loc, word, value);
+    auto constant = [&](int64_t value) -> Value {
+      return arith::ConstantIntOp::create(rewriter, loc, word, value);
+    };
+    Value tagged = arith::OrIOp::create(
+        rewriter, loc,
+        arith::ShLIOp::create(rewriter, loc, integer, constant(2)),
+        constant(1));
+    scf::YieldOp::create(
+        rewriter, loc,
+        ValueRange{bridge::MpzFromBitsOp::create(rewriter, loc, type, tagged)});
+    rewriter.setInsertionPointToStart(&branch.getElseRegion().front());
+    auto call = func::CallOp::create(rewriter, loc, *runtime, value);
+    scf::YieldOp::create(rewriter, loc, call.getResults());
+    rewriter.replaceOp(op, branch.getResults());
+    return success();
+  }
+};
+
 struct CmpILowering : FastPathLowering<CmpILowering> {
   using FastPathLowering::FastPathLowering;
   using Op = CmpIOp;
@@ -1767,26 +1820,28 @@ struct ConvertRCGMPToSCFPass
   }
   void runOnOperation() override {
     RewritePatternSet patterns(&getContext());
-    patterns.add<
-        ConstantLowering, ExtSILowering, ExtUILowering, RetainLowering,
-        ReleaseLowering, AddILowering, SubILowering, MonusILowering,
-        MulILowering, GcdILowering, AndILowering, XOrILowering, OrILowering,
-        NotILowering, NegILowering, AbsILowering, ShLILowering, ShRSILowering,
-        FloorMod2ExpILowering, IPowILowering, DivSILowering, RemSILowering,
-        FloorDivSILowering, FloorModSILowering, DivRemSILowering,
-        FloorDivModSILowering, EDivSILowering, EModSILowering,
-        EDivModSILowering, CmpILowering, TruncationLowering<TruncIOp>,
-        TruncationLowering<TruncIOverflowOp>, Log2ILowering, TestBitILowering,
-        LimbCountLowering, LimbLowering, SIToFPLowering>(&getContext());
+    patterns
+        .add<ConstantLowering, ExtSILowering, ExtUILowering, RetainLowering,
+             ReleaseLowering, AddILowering, SubILowering, MonusILowering,
+             MulILowering, GcdILowering, AndILowering, XOrILowering,
+             OrILowering, NotILowering, NegILowering, AbsILowering,
+             ShLILowering, ShRSILowering, FloorMod2ExpILowering, IPowILowering,
+             DivSILowering, RemSILowering, FloorDivSILowering,
+             FloorModSILowering, DivRemSILowering, FloorDivModSILowering,
+             EDivSILowering, EModSILowering, EDivModSILowering, CmpILowering,
+             TruncationLowering<TruncIOp>, TruncationLowering<TruncIOverflowOp>,
+             Log2ILowering, TestBitILowering, LimbCountLowering, LimbLowering,
+             SIToFPLowering, FPToSILowering>(&getContext());
     populateMatchLoweringPatterns(patterns);
     ConversionTarget target(getContext());
-    target.addIllegalOp<
-        ConstantOp, ExtSIOp, ExtUIOp, RetainOp, ReleaseOp, AddIOp, SubIOp,
-        MonusIOp, MulIOp, GcdIOp, AndIOp, XOrIOp, OrIOp, NotIOp, NegIOp, AbsIOp,
-        ShLIOp, ShRSIOp, FloorMod2ExpIOp, IPowIOp, DivSIOp, RemSIOp,
-        FloorDivSIOp, FloorModSIOp, DivRemSIOp, FloorDivModSIOp, EDivSIOp,
-        EModSIOp, EDivModSIOp, CmpIOp, TruncIOp, TruncIOverflowOp, Log2IOp,
-        TestBitIOp, LimbCountOp, LimbOp, SIToFPOp, MatchOp, YieldOp>();
+    target.addIllegalOp<ConstantOp, ExtSIOp, ExtUIOp, RetainOp, ReleaseOp,
+                        AddIOp, SubIOp, MonusIOp, MulIOp, GcdIOp, AndIOp,
+                        XOrIOp, OrIOp, NotIOp, NegIOp, AbsIOp, ShLIOp, ShRSIOp,
+                        FloorMod2ExpIOp, IPowIOp, DivSIOp, RemSIOp,
+                        FloorDivSIOp, FloorModSIOp, DivRemSIOp, FloorDivModSIOp,
+                        EDivSIOp, EModSIOp, EDivModSIOp, CmpIOp, TruncIOp,
+                        TruncIOverflowOp, Log2IOp, TestBitIOp, LimbCountOp,
+                        LimbOp, SIToFPOp, FPToSIOp, MatchOp, YieldOp>();
     target.markUnknownOpDynamicallyLegal([](Operation *) { return true; });
     if (failed(applyPartialConversion(getOperation(), target,
                                       std::move(patterns))))
