@@ -1346,6 +1346,152 @@ struct Log2ILowering : OpRewritePattern<Log2IOp> {
   }
 };
 
+// Lowers rcgmp.testbiti, reading the bit from the immediate or from the limb
+// that holds it, W the handle width. Only a negative integer whose bit lies
+// above a zero low limb calls the runtime.
+struct TestBitILowering : FastPathLowering<TestBitILowering> {
+  using FastPathLowering::FastPathLowering;
+  using Op = TestBitIOp;
+
+  static constexpr bool consumesOperands = false;
+
+  static StringRef getRuntimeName(bool atomic) {
+    return atomic ? "rcgmp_mpz_tstbit_atomic" : "rcgmp_mpz_tstbit";
+  }
+
+  static Type getRuntimeResultType(Operation *op) {
+    return IntegerType::get(op->getContext(), 32);
+  }
+
+  static Value buildSlowResult(PatternRewriter &rewriter, Location loc,
+                               Operation *, Value bit) {
+    auto zero = arith::ConstantIntOp::create(rewriter, loc, 0, 32);
+    return arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::ne, bit,
+                                 zero);
+  }
+
+  // Every bit beyond the magnitude is the sign, which a saturated index still
+  // reaches.
+  static Value buildRuntimeOperand(PatternRewriter &rewriter, Location loc,
+                                   Value index, IntegerType word) {
+    return saturatingWord(rewriter, loc, index, word);
+  }
+
+  static FastPath buildFastPath(PatternRewriter &rewriter, Location loc,
+                                Operation *, ValueRange operands) {
+    Value bits = operands[0], index = operands[1];
+    unsigned width = cast<IntegerType>(bits.getType()).getWidth();
+    auto constant = [&](int64_t value) -> Value {
+      return arith::ConstantIntOp::create(rewriter, loc, value, width);
+    };
+    // The tagged bits 4*x + 1 hold bit n of x at n + 2 for n below W - 2, and
+    // the sign above. Shifting them right arithmetically by n, clamped to
+    // W - 3, brings the bit to position 2.
+    auto shift =
+        arith::MinUIOp::create(rewriter, loc, index, constant(width - 3));
+    auto shifted = arith::ShRSIOp::create(rewriter, loc, bits, shift);
+    auto bit = arith::AndIOp::create(rewriter, loc, shifted, constant(4));
+    auto set = arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::ne,
+                                     bit, constant(0));
+    return {{set}, allImmediate(rewriter, loc, bits)};
+  }
+
+  // A nonnegative heap integer is its magnitude m in two's complement, and a
+  // negative one is ~(m - 1). The limb of ~(m - 1) at a position is the
+  // complement of that of m, plus one exactly when every lower limb of m is
+  // zero, which is known without a scan at position zero or when limb 0 is
+  // not zero. Beyond the magnitude, every bit is the sign.
+  static Value buildSlowPath(PatternRewriter &rewriter, Location loc,
+                             Operation *op, function_ref<Value()> callRuntime) {
+    auto test = cast<TestBitIOp>(op);
+    Value value = test.getValue();
+    unsigned width = DataLayout::closest(op)
+                         .getTypeSizeInBits(value.getType())
+                         .getFixedValue();
+    auto word = rewriter.getIntegerType(width);
+    auto i1 = rewriter.getI1Type();
+    auto constant = [&](int64_t value) -> Value {
+      return arith::ConstantIntOp::create(rewriter, loc, value, width);
+    };
+    auto boolean = [&](bool value) -> Value {
+      return arith::ConstantIntOp::create(rewriter, loc, value, 1);
+    };
+    auto limbAt = [&](Value index) -> Value {
+      return bridge::MpzLimbOp::create(rewriter, loc, word, value, index);
+    };
+    Value index = saturatingWord(rewriter, loc, test.getIndex(), word);
+    Value position =
+        arith::DivUIOp::create(rewriter, loc, index, constant(width));
+    Value offset =
+        arith::RemUIOp::create(rewriter, loc, index, constant(width));
+    Value limbIndex = arith::IndexCastUIOp::create(
+        rewriter, loc, rewriter.getIndexType(), position);
+    auto bitOf = [&](Value limb) -> Value {
+      return arith::TruncIOp::create(
+          rewriter, loc, i1,
+          arith::ShRUIOp::create(rewriter, loc, limb, offset));
+    };
+    // Builds the bit of a magnitude of count limbs with inside when the
+    // position lies within it, and yields the sign otherwise.
+    auto withinMagnitude = [&](Value count, bool sign,
+                               function_ref<Value()> inside) -> Value {
+      auto within = arith::CmpIOp::create(
+          rewriter, loc, arith::CmpIPredicate::ult, position, count);
+      auto branch = scf::IfOp::create(rewriter, loc, TypeRange{i1}, within,
+                                      /*withElseRegion=*/true);
+      OpBuilder::InsertionGuard guard(rewriter);
+      rewriter.setInsertionPointToStart(&branch.getThenRegion().front());
+      scf::YieldOp::create(rewriter, loc, ValueRange{inside()});
+      rewriter.setInsertionPointToStart(&branch.getElseRegion().front());
+      scf::YieldOp::create(rewriter, loc, ValueRange{boolean(sign)});
+      return branch.getResult(0);
+    };
+    Value size = bridge::MpzSizeOp::create(rewriter, loc, word, value);
+    auto negative = arith::CmpIOp::create(
+        rewriter, loc, arith::CmpIPredicate::slt, size, constant(0));
+    auto branch = scf::IfOp::create(rewriter, loc, TypeRange{i1}, negative,
+                                    /*withElseRegion=*/true);
+    OpBuilder::InsertionGuard guard(rewriter);
+    rewriter.setInsertionPointToStart(&branch.getThenRegion().front());
+    Value count = arith::SubIOp::create(rewriter, loc, constant(0), size);
+    scf::YieldOp::create(
+        rewriter, loc, ValueRange{withinMagnitude(count, true, [&] {
+          Value limb = limbAt(limbIndex);
+          auto first = arith::CmpIOp::create(
+              rewriter, loc, arith::CmpIPredicate::eq, position, constant(0));
+          auto lowZero = arith::CmpIOp::create(
+              rewriter, loc, arith::CmpIPredicate::eq,
+              limbAt(arith::ConstantIndexOp::create(rewriter, loc, 0)),
+              constant(0));
+          auto scan = arith::AndIOp::create(
+              rewriter, loc,
+              arith::XOrIOp::create(rewriter, loc, first, boolean(true)),
+              lowZero);
+          auto local = scf::IfOp::create(rewriter, loc, TypeRange{i1}, scan,
+                                         /*withElseRegion=*/true);
+          OpBuilder::InsertionGuard guard(rewriter);
+          rewriter.setInsertionPointToStart(&local.getThenRegion().front());
+          scf::YieldOp::create(
+              rewriter, loc,
+              ValueRange{buildSlowResult(rewriter, loc, op, callRuntime())});
+          rewriter.setInsertionPointToStart(&local.getElseRegion().front());
+          Value complement =
+              arith::XOrIOp::create(rewriter, loc, limb, constant(-1));
+          Value carry = arith::ExtUIOp::create(rewriter, loc, word, first);
+          scf::YieldOp::create(rewriter, loc,
+                               ValueRange{bitOf(arith::AddIOp::create(
+                                   rewriter, loc, complement, carry))});
+          return local.getResult(0);
+        })});
+    rewriter.setInsertionPointToStart(&branch.getElseRegion().front());
+    scf::YieldOp::create(rewriter, loc,
+                         ValueRange{withinMagnitude(size, false, [&] {
+                           return bitOf(limbAt(limbIndex));
+                         })});
+    return branch.getResult(0);
+  }
+};
+
 struct CmpILowering : FastPathLowering<CmpILowering> {
   using FastPathLowering::FastPathLowering;
   using Op = CmpIOp;
@@ -1502,26 +1648,26 @@ struct ConvertRCGMPToSCFPass
   }
   void runOnOperation() override {
     RewritePatternSet patterns(&getContext());
-    patterns.add<ConstantLowering, ExtSILowering, ExtUILowering, RetainLowering,
-                 ReleaseLowering, AddILowering, SubILowering, MonusILowering,
-                 MulILowering, GcdILowering, AndILowering, XOrILowering,
-                 OrILowering, NotILowering, NegILowering, AbsILowering,
-                 ShLILowering, ShRSILowering, FloorMod2ExpILowering,
-                 IPowILowering, DivSILowering, RemSILowering,
-                 FloorDivSILowering, FloorModSILowering, DivRemSILowering,
-                 FloorDivModSILowering, EDivSILowering, EModSILowering,
-                 EDivModSILowering, CmpILowering, TruncationLowering<TruncIOp>,
-                 TruncationLowering<TruncIOverflowOp>, Log2ILowering>(
-        &getContext());
+    patterns
+        .add<ConstantLowering, ExtSILowering, ExtUILowering, RetainLowering,
+             ReleaseLowering, AddILowering, SubILowering, MonusILowering,
+             MulILowering, GcdILowering, AndILowering, XOrILowering,
+             OrILowering, NotILowering, NegILowering, AbsILowering,
+             ShLILowering, ShRSILowering, FloorMod2ExpILowering, IPowILowering,
+             DivSILowering, RemSILowering, FloorDivSILowering,
+             FloorModSILowering, DivRemSILowering, FloorDivModSILowering,
+             EDivSILowering, EModSILowering, EDivModSILowering, CmpILowering,
+             TruncationLowering<TruncIOp>, TruncationLowering<TruncIOverflowOp>,
+             Log2ILowering, TestBitILowering>(&getContext());
     populateMatchLoweringPatterns(patterns);
     ConversionTarget target(getContext());
-    target.addIllegalOp<ConstantOp, ExtSIOp, ExtUIOp, RetainOp, ReleaseOp,
-                        AddIOp, SubIOp, MonusIOp, MulIOp, GcdIOp, AndIOp,
-                        XOrIOp, OrIOp, NotIOp, NegIOp, AbsIOp, ShLIOp, ShRSIOp,
-                        FloorMod2ExpIOp, IPowIOp, DivSIOp, RemSIOp,
-                        FloorDivSIOp, FloorModSIOp, DivRemSIOp, FloorDivModSIOp,
-                        EDivSIOp, EModSIOp, EDivModSIOp, CmpIOp, TruncIOp,
-                        TruncIOverflowOp, Log2IOp, MatchOp, YieldOp>();
+    target.addIllegalOp<
+        ConstantOp, ExtSIOp, ExtUIOp, RetainOp, ReleaseOp, AddIOp, SubIOp,
+        MonusIOp, MulIOp, GcdIOp, AndIOp, XOrIOp, OrIOp, NotIOp, NegIOp, AbsIOp,
+        ShLIOp, ShRSIOp, FloorMod2ExpIOp, IPowIOp, DivSIOp, RemSIOp,
+        FloorDivSIOp, FloorModSIOp, DivRemSIOp, FloorDivModSIOp, EDivSIOp,
+        EModSIOp, EDivModSIOp, CmpIOp, TruncIOp, TruncIOverflowOp, Log2IOp,
+        TestBitIOp, MatchOp, YieldOp>();
     target.markUnknownOpDynamicallyLegal([](Operation *) { return true; });
     if (failed(applyPartialConversion(getOperation(), target,
                                       std::move(patterns))))

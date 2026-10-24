@@ -107,12 +107,13 @@ rcgmp_native_test(floormod2exp)
 rcgmp_native_test(power)
 rcgmp_native_test(division)
 rcgmp_native_test(log2)
+rcgmp_native_test(testbit)
 rcgmp_native_test(gcd)
 rcgmp_native_test(exact-division)
 
 # The differential harness compares each feature, compiled from its own MLIR
-# source, with GMP. It also exercises the comparisons in compare.mlir and the
-# logarithms in log2.mlir.
+# source, with GMP. It also exercises the comparisons in compare.mlir, the
+# logarithms in log2.mlir, and the bit tests in testbit.mlir.
 add_executable(rcgmp-differential
   runtime/differential/binary.cpp runtime/differential/chain.cpp
   runtime/differential/compare.cpp runtime/differential/construction.cpp
@@ -121,10 +122,11 @@ add_executable(rcgmp-differential
   runtime/differential/floormod2exp.cpp
   runtime/differential/gcd.cpp runtime/differential/log2.cpp
   runtime/differential/match.cpp runtime/differential/power.cpp
-  runtime/differential/shift.cpp runtime/differential/truncation.cpp
-  runtime/differential/unary.cpp
+  runtime/differential/shift.cpp runtime/differential/testbit.cpp
+  runtime/differential/truncation.cpp runtime/differential/unary.cpp
   ${CMAKE_CURRENT_BINARY_DIR}/runtime/compare.o
-  ${CMAKE_CURRENT_BINARY_DIR}/runtime/log2.o)
+  ${CMAKE_CURRENT_BINARY_DIR}/runtime/log2.o
+  ${CMAKE_CURRENT_BINARY_DIR}/runtime/testbit.o)
 target_sources(rcgmp-differential PRIVATE FILE_SET CXX_MODULES FILES
   runtime/differential/Differential.cppm)
 foreach(name binary constant counting division exact extend floormod2exp match

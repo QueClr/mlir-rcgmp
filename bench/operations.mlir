@@ -547,3 +547,22 @@ func.func @divsi_by_8(%x: !rcgmp.mpz) -> !rcgmp.mpz {
   %r = rcgmp.divsi %x, %c : !rcgmp.mpz
   return %r : !rcgmp.mpz
 }
+func.func @testbiti(%x: !rcgmp.mpz, %n: i64) -> i32 {
+  %r = rcgmp.testbiti %x, %n : !rcgmp.mpz, i64
+  %e = arith.extui %r : i1 to i32
+  return %e : i32
+}
+// The same bit without rcgmp.testbiti, as Lean's Nat.testBit computes it:
+// shift a reference to the integer right, mask the lowest bit, and compare it
+// with zero.
+func.func @shifted_testbit(%x: !rcgmp.mpz, %n: i64) -> i32 {
+  %one = rcgmp.constant 1 : !rcgmp.mpz
+  %zero = rcgmp.constant 0 : !rcgmp.mpz
+  rcgmp.retain %x : !rcgmp.mpz
+  %s = rcgmp.shrsi %x, %n : !rcgmp.mpz, i64
+  %b = rcgmp.andi %s, %one : !rcgmp.mpz
+  %r = rcgmp.cmpi ne, %b, %zero : !rcgmp.mpz
+  rcgmp.release %b : !rcgmp.mpz
+  %e = arith.extui %r : i1 to i32
+  return %e : i32
+}

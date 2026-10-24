@@ -80,6 +80,8 @@ std::int64_t trunci(void *);
 std::int64_t trunci_overflow(void *);
 std::int64_t log2i(void *);
 std::int64_t shifted_trunci_log2(void *);
+std::int32_t testbiti(void *, std::int64_t);
+std::int32_t shifted_testbit(void *, std::int64_t);
 void *gcdi(void *, void *);
 void *euclid(void *, void *);
 void *divsi_exact(void *, void *);
@@ -962,6 +964,48 @@ void registerLogarithms() {
   }
 }
 
+// Bits of borrowed integers, the same bits found by shifting a reference
+// right, and GMP. Bit 100 lies in the high limb of a heap integer, which a
+// negative integer complements unless its low limb is zero.
+void registerBits() {
+  static constexpr std::array<std::uintptr_t, 2> zeroLowWords{0, lhsWords[1]};
+  for (auto [label, operand, index] : {
+           std::tuple{"/immediate", RemainderOperand{smallLhs}, 5},
+           {"/negative immediate", RemainderOperand{-smallLhs}, 5},
+           {"/heap", RemainderOperand{0, lhsWords}, 100},
+           {"/negative heap", RemainderOperand{0, lhsWords, true}, 100},
+           {"/negative heap, zero low limb",
+            RemainderOperand{0, zeroLowWords, true}, 100},
+       }) {
+    for (auto [name, op] : {std::pair{"testbiti", testbiti},
+                            {"shifted testbit", shifted_testbit}})
+      benchmark::RegisterBenchmark(std::string(name) + label,
+                                   [=](benchmark::State &state) {
+                                     void *x = operand.compiled();
+                                     std::int64_t n = index;
+                                     for (auto _ : state) {
+                                       benchmark::DoNotOptimize(x);
+                                       benchmark::DoNotOptimize(n);
+                                       benchmark::DoNotOptimize(op(x, n));
+                                     }
+                                     rcgmp_mpz_release(x, 0);
+                                   });
+    benchmark::RegisterBenchmark(std::string("gmp tstbit") + label,
+                                 [=](benchmark::State &state) {
+                                   mpz_t x;
+                                   mpz_init(x);
+                                   operand.gmp(x);
+                                   mp_bitcnt_t n = index;
+                                   for (auto _ : state) {
+                                     benchmark::DoNotOptimize(x);
+                                     benchmark::DoNotOptimize(n);
+                                     benchmark::DoNotOptimize(mpz_tstbit(x, n));
+                                   }
+                                   mpz_clear(x);
+                                 });
+  }
+}
+
 void registerOthers() {
   static Integer smallX(smallLhs), smallY(smallRhs), heapX(lhsWords),
       heapY(rhsWords), five(5);
@@ -1239,7 +1283,7 @@ void registerExactDivisions() {
     (registerBinaries(), registerMonus(), registerUnaries(), registerShifts(),
      registerRemainders(), registerPowers(), registerDivisions(),
      registerEuclidean(), registerLean(), registerTruncations(),
-     registerLogarithms(), registerOthers(), registerGcd(),
+     registerLogarithms(), registerBits(), registerOthers(), registerGcd(),
      registerExactDivisions(), 0);
 
 } // namespace

@@ -205,6 +205,27 @@ func.func @logarithms() -> (i64, i64, i64, i7) {
   return %a, %b, %c, %d : i64, i64, i64, i7
 }
 
+// Bits are those of the two's complement, and bits beyond the magnitude, even
+// at an index wider than 64 bits, are the sign.
+// CHECK-LABEL: func.func @bits
+// CHECK-DAG: %[[FALSE:.*]] = arith.constant false
+// CHECK-DAG: %[[TRUE:.*]] = arith.constant true
+// CHECK: return %[[FALSE]], %[[TRUE]], %[[TRUE]], %[[FALSE]], %[[TRUE]]
+func.func @bits() -> (i1, i1, i1, i1, i1) {
+  %big = rcgmp.constant 340282366920938463463374607431768211456 : !rcgmp.mpz
+  %negative = rcgmp.constant -340282366920938463463374607431768211456 : !rcgmp.mpz
+  %c127 = arith.constant 127 : i64
+  %c128 = arith.constant 128 : i64
+  %c129 = arith.constant 129 : i64
+  %wide = arith.constant 1267650600228229401496703205376 : i128
+  %a = rcgmp.testbiti %negative, %c127 : !rcgmp.mpz, i64
+  %b = rcgmp.testbiti %negative, %c128 : !rcgmp.mpz, i64
+  %c = rcgmp.testbiti %big, %c128 : !rcgmp.mpz, i64
+  %d = rcgmp.testbiti %big, %c129 : !rcgmp.mpz, i64
+  %e = rcgmp.testbiti %negative, %wide : !rcgmp.mpz, i128
+  return %a, %b, %c, %d, %e : i1, i1, i1, i1, i1
+}
+
 // Constants need no reference counting.
 // CHECK-LABEL: func.func @counting
 // CHECK-NOT: rcgmp.retain
