@@ -141,6 +141,16 @@ void gmpMonus(mpz_ptr result, mpz_srcptr lhs, mpz_srcptr rhs) {
     mpz_set_ui(result, 0);
 }
 
+// The Euclidean quotient and nonnegative remainder of lhs by rhs: the floored
+// ones by a positive divisor, and the ceiled ones by a negative one.
+void gmpEuclidean(mpz_ptr quotient, mpz_ptr remainder, mpz_srcptr lhs,
+                  mpz_srcptr rhs) {
+  if (mpz_sgn(rhs) > 0)
+    mpz_fdiv_qr(quotient, remainder, lhs, rhs);
+  else
+    mpz_cdiv_qr(quotient, remainder, lhs, rhs);
+}
+
 // The canonical runtime integer for value. The result owns one reference.
 void *toRuntime(const Integer &value) {
   return fromWords(value.words(), value.negative()).pointer();

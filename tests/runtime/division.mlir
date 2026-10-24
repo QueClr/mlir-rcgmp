@@ -8,9 +8,13 @@
 // SCF-DAG: func.func private @rcgmp_mpz_fdiv_r(!rcgmp.mpz, !rcgmp.mpz, i32) -> !rcgmp.mpz
 // SCF-DAG: func.func private @rcgmp_mpz_tdiv_qr(!rcgmp.mpz, !rcgmp.mpz, i32) -> (!rcgmp.mpz, !rcgmp.mpz)
 // SCF-DAG: func.func private @rcgmp_mpz_fdiv_qr_atomic(!rcgmp.mpz<atomic>, !rcgmp.mpz<atomic>, i32) -> (!rcgmp.mpz<atomic>, !rcgmp.mpz<atomic>)
+// SCF-DAG: func.func private @rcgmp_mpz_ediv_q(!rcgmp.mpz, !rcgmp.mpz, i32) -> !rcgmp.mpz
+// SCF-DAG: func.func private @rcgmp_mpz_ediv_r_atomic(!rcgmp.mpz<atomic>, !rcgmp.mpz<atomic>, i32) -> !rcgmp.mpz<atomic>
+// SCF-DAG: func.func private @rcgmp_mpz_ediv_qr(!rcgmp.mpz, !rcgmp.mpz, i32) -> (!rcgmp.mpz, !rcgmp.mpz)
 
 // A zero divisor is replaced by one and invalidates the fast path, as does
-// the quotient of the immediate minimum by -1.
+// dividing the immediate minimum by -1, which the operands show before the
+// division.
 // SCF-LABEL: func.func @divsi_local
 // SCF: %[[LHS:.*]] = rcgmp.bridge.mpz.to_bits %arg0
 // SCF: %[[RHS:.*]] = rcgmp.bridge.mpz.to_bits %arg1
@@ -20,9 +24,11 @@
 // SCF: %[[Y:.*]] = arith.shrsi %[[RHS]], %[[TWO]]
 // SCF: %[[NONZERO:.*]] = arith.cmpi ne, %[[Y]], %[[ZERO]]
 // SCF: %[[DIVISOR:.*]] = arith.select %[[NONZERO]], %[[Y]]
-// SCF: %[[Q:.*]] = arith.divsi %[[X]], %[[DIVISOR]]
-// SCF: %[[MAX:.*]] = arith.constant 2305843009213693951 : i64
-// SCF: arith.cmpi sle, %[[Q]], %[[MAX]]
+// SCF: arith.divsi %[[X]], %[[DIVISOR]]
+// SCF: %[[MIN:.*]] = arith.constant -2305843009213693952 : i64
+// SCF: arith.cmpi ne, %[[X]], %[[MIN]]
+// SCF: %[[MINUS_ONE:.*]] = arith.constant -1 : i64
+// SCF: arith.cmpi ne, %[[DIVISOR]], %[[MINUS_ONE]]
 // SCF: scf.if
 // SCF: func.call @rcgmp_mpz_tdiv_q
 // LLVM-LABEL: llvm.func @divsi_local
@@ -37,7 +43,7 @@
 // SCF: arith.cmpi slt, %[[SIGNS]]
 // SCF: %[[ADJUST:.*]] = arith.andi
 // SCF: arith.select %[[ADJUST]]
-// SCF-NOT: arith.cmpi sle
+// SCF-NOT: arith.constant -2305843009213693952
 // SCF: scf.if
 
 // assume_nonzero divides by the untagged divisor directly.
@@ -53,6 +59,31 @@
 // SCF: func.call @rcgmp_mpz_tdiv_qr({{.*}}) : (!rcgmp.mpz, !rcgmp.mpz, i32) -> (!rcgmp.mpz, !rcgmp.mpz)
 // LLVM-LABEL: llvm.func @divremsi_local
 // LLVM: llvm.call @rcgmp_mpz_tdiv_qr({{.*}}) : (!llvm.ptr, !llvm.ptr, i32) -> !llvm.struct<(ptr, ptr)>
+
+// Euclidean division divides magnitudes unsigned, a negative dividend
+// complemented.
+// SCF-LABEL: func.func @edivsi_local
+// SCF: %[[X:.*]] = arith.shrsi %{{.*}}, %[[TWO:.*]] : i64
+// SCF: %[[SHIFT:.*]] = arith.constant 63 : i64
+// SCF: %[[SIGN:.*]] = arith.shrsi %[[X]], %[[SHIFT]]
+// SCF: %[[A:.*]] = arith.xori %[[X]], %[[SIGN]]
+// SCF: arith.divui %[[A]]
+// SCF: scf.if
+// SCF: func.call @rcgmp_mpz_ediv_q
+// LLVM-LABEL: llvm.func @edivsi_local
+// LLVM: llvm.udiv
+// LLVM: llvm.call @rcgmp_mpz_ediv_q
+
+// A positive power-of-two divisor divides as floored division does, and a
+// negative one as Euclidean division.
+// SCF-LABEL: func.func @edivmodsi_by_8
+// SCF-NOT: arith.remui
+// SCF: arith.remsi
+// SCF: func.call @rcgmp_mpz_ediv_qr
+// SCF-LABEL: func.func @edivmodsi_by_minus_8
+// SCF-NOT: arith.remsi
+// SCF: arith.remui
+// SCF: func.call @rcgmp_mpz_ediv_qr
 func.func @divsi_local(%x: !rcgmp.mpz, %y: !rcgmp.mpz) -> !rcgmp.mpz {
   %r = rcgmp.divsi %x, %y : !rcgmp.mpz
   return %r : !rcgmp.mpz
@@ -104,4 +135,38 @@ func.func @floordivmodsi_local(%x: !rcgmp.mpz, %y: !rcgmp.mpz) -> (!rcgmp.mpz, !
 func.func @floordivmodsi_atomic(%x: !rcgmp.mpz<atomic>, %y: !rcgmp.mpz<atomic>) -> (!rcgmp.mpz<atomic>, !rcgmp.mpz<atomic>) {
   %q, %r = rcgmp.floordivmodsi %x, %y : !rcgmp.mpz<atomic>
   return %q, %r : !rcgmp.mpz<atomic>, !rcgmp.mpz<atomic>
+}
+func.func @edivsi_local(%x: !rcgmp.mpz, %y: !rcgmp.mpz) -> !rcgmp.mpz {
+  %r = rcgmp.edivsi %x, %y : !rcgmp.mpz
+  return %r : !rcgmp.mpz
+}
+func.func @edivsi_atomic(%x: !rcgmp.mpz<atomic>, %y: !rcgmp.mpz<atomic>) -> !rcgmp.mpz<atomic> {
+  %r = rcgmp.edivsi %x, %y : !rcgmp.mpz<atomic>
+  return %r : !rcgmp.mpz<atomic>
+}
+func.func @emodsi_local(%x: !rcgmp.mpz, %y: !rcgmp.mpz) -> !rcgmp.mpz {
+  %r = rcgmp.emodsi %x, %y : !rcgmp.mpz
+  return %r : !rcgmp.mpz
+}
+func.func @emodsi_atomic(%x: !rcgmp.mpz<atomic>, %y: !rcgmp.mpz<atomic>) -> !rcgmp.mpz<atomic> {
+  %r = rcgmp.emodsi %x, %y : !rcgmp.mpz<atomic>
+  return %r : !rcgmp.mpz<atomic>
+}
+func.func @edivmodsi_local(%x: !rcgmp.mpz, %y: !rcgmp.mpz) -> (!rcgmp.mpz, !rcgmp.mpz) {
+  %q, %r = rcgmp.edivmodsi %x, %y : !rcgmp.mpz
+  return %q, %r : !rcgmp.mpz, !rcgmp.mpz
+}
+func.func @edivmodsi_atomic(%x: !rcgmp.mpz<atomic>, %y: !rcgmp.mpz<atomic>) -> (!rcgmp.mpz<atomic>, !rcgmp.mpz<atomic>) {
+  %q, %r = rcgmp.edivmodsi %x, %y : !rcgmp.mpz<atomic>
+  return %q, %r : !rcgmp.mpz<atomic>, !rcgmp.mpz<atomic>
+}
+func.func @edivmodsi_by_8(%x: !rcgmp.mpz) -> (!rcgmp.mpz, !rcgmp.mpz) {
+  %c = rcgmp.constant 8 : !rcgmp.mpz
+  %q, %r = rcgmp.edivmodsi %x, %c : !rcgmp.mpz
+  return %q, %r : !rcgmp.mpz, !rcgmp.mpz
+}
+func.func @edivmodsi_by_minus_8(%x: !rcgmp.mpz) -> (!rcgmp.mpz, !rcgmp.mpz) {
+  %c = rcgmp.constant -8 : !rcgmp.mpz
+  %q, %r = rcgmp.edivmodsi %x, %c : !rcgmp.mpz
+  return %q, %r : !rcgmp.mpz, !rcgmp.mpz
 }

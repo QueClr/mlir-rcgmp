@@ -66,8 +66,9 @@ void *rcgmp_mpz_shr_atomic(void *value, uintptr_t amount, uint32_t reuse);
 
 // Divide lhs by rhs, with the same ownership and reuse contract as the binary
 // operations. tdiv rounds the quotient toward zero, giving the remainder the
-// sign of lhs, and fdiv rounds it toward negative infinity, giving the
-// remainder the sign of rhs. A zero divisor terminates the program.
+// sign of lhs, fdiv rounds it toward negative infinity, giving the remainder
+// the sign of rhs, and ediv rounds it so that the remainder is nonnegative. A
+// zero divisor terminates the program.
 void *rcgmp_mpz_tdiv_q(void *lhs, void *rhs, uint32_t reuse);
 void *rcgmp_mpz_tdiv_q_atomic(void *lhs, void *rhs, uint32_t reuse);
 void *rcgmp_mpz_tdiv_r(void *lhs, void *rhs, uint32_t reuse);
@@ -76,6 +77,10 @@ void *rcgmp_mpz_fdiv_q(void *lhs, void *rhs, uint32_t reuse);
 void *rcgmp_mpz_fdiv_q_atomic(void *lhs, void *rhs, uint32_t reuse);
 void *rcgmp_mpz_fdiv_r(void *lhs, void *rhs, uint32_t reuse);
 void *rcgmp_mpz_fdiv_r_atomic(void *lhs, void *rhs, uint32_t reuse);
+void *rcgmp_mpz_ediv_q(void *lhs, void *rhs, uint32_t reuse);
+void *rcgmp_mpz_ediv_q_atomic(void *lhs, void *rhs, uint32_t reuse);
+void *rcgmp_mpz_ediv_r(void *lhs, void *rhs, uint32_t reuse);
+void *rcgmp_mpz_ediv_r_atomic(void *lhs, void *rhs, uint32_t reuse);
 
 // Both results of a division, each owning one reference.
 typedef struct {
@@ -87,6 +92,8 @@ rcgmp_mpz_qr rcgmp_mpz_tdiv_qr(void *lhs, void *rhs, uint32_t reuse);
 rcgmp_mpz_qr rcgmp_mpz_tdiv_qr_atomic(void *lhs, void *rhs, uint32_t reuse);
 rcgmp_mpz_qr rcgmp_mpz_fdiv_qr(void *lhs, void *rhs, uint32_t reuse);
 rcgmp_mpz_qr rcgmp_mpz_fdiv_qr_atomic(void *lhs, void *rhs, uint32_t reuse);
+rcgmp_mpz_qr rcgmp_mpz_ediv_qr(void *lhs, void *rhs, uint32_t reuse);
+rcgmp_mpz_qr rcgmp_mpz_ediv_qr_atomic(void *lhs, void *rhs, uint32_t reuse);
 
 // Borrow both operands and return a negative, zero, or positive value as lhs is
 // less than, equal to, or greater than rhs. Reference counts are unchanged.

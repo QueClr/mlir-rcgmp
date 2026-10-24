@@ -44,6 +44,10 @@ void *divsi(void *, void *);
 void *remsi(void *, void *);
 void *floordivsi(void *, void *);
 void *floormodsi(void *, void *);
+void *edivsi(void *, void *);
+void *emodsi(void *, void *);
+void *composed_edivsi(void *, void *);
+void *composed_emodsi(void *, void *);
 rcgmp_mpz_qr divremsi(void *, void *);
 std::int64_t trunci(void *);
 std::int64_t trunci_overflow(void *);
@@ -500,6 +504,78 @@ void registerDivisions() {
                                  });
 }
 
+void gmpEuclideanQuotient(mpz_ptr result, mpz_srcptr lhs, mpz_srcptr rhs) {
+  (mpz_sgn(rhs) > 0 ? mpz_fdiv_q : mpz_cdiv_q)(result, lhs, rhs);
+}
+
+// Euclidean division, mostly of a negative dividend, next to the same result
+// composed from floored division, floored division itself, and GMP. Floored
+// division is the Euclidean one for a positive divisor.
+void registerEuclidean() {
+  Counted counted = countings[0];
+  using Operands = std::pair<void *, void *> (*)();
+  const std::array<std::pair<const char *, Operands>, 7> cases{{
+      {"/immediates, nonnegative",
+       [] { return std::pair{immediate(smallLhs), immediate(smallRhs)}; }},
+      {"/immediates, positive",
+       [] { return std::pair{immediate(-smallLhs), immediate(smallRhs)}; }},
+      {"/immediates, negative",
+       [] { return std::pair{immediate(-smallLhs), immediate(-smallRhs)}; }},
+      {"/shared heap, immediate, positive",
+       [] {
+         return std::pair{rcgmp_mpz_neg(heap(lhsWords), 0),
+                          immediate(smallRhs)};
+       }},
+      {"/shared heap, immediate, negative",
+       [] {
+         return std::pair{rcgmp_mpz_neg(heap(lhsWords), 0),
+                          immediate(-smallRhs)};
+       }},
+      {"/shared heaps, positive",
+       [] {
+         return std::pair{rcgmp_mpz_neg(heap(lhsWords), 0), heap(rhsWords)};
+       }},
+      {"/shared heaps, negative",
+       [] {
+         return std::pair{rcgmp_mpz_neg(heap(lhsWords), 0),
+                          rcgmp_mpz_neg(heap(rhsWords), 0)};
+       }},
+  }};
+  for (auto [name, op] : {std::pair{"edivsi", edivsi},
+                          {"composed edivsi", composed_edivsi},
+                          {"floordivsi", floordivsi},
+                          {"emodsi", emodsi},
+                          {"composed emodsi", composed_emodsi},
+                          {"floormodsi", floormodsi}}) {
+    counted.binary = op;
+    for (auto [label, operands] : cases)
+      benchmark::RegisterBenchmark(std::string(name) + label,
+                                   [=](benchmark::State &state) {
+                                     auto [x, y] = operands();
+                                     binaryShared(state, counted, x, y);
+                                   });
+  }
+  static Integer x(smallLhs), y(smallRhs), negativeX(-smallLhs),
+      negativeY(-smallRhs), heapX(lhsWords), heapY(rhsWords),
+      negativeHeapY(rhsWords);
+  mpz_neg(heapX.value, heapX.value);
+  mpz_neg(negativeHeapY.value, negativeHeapY.value);
+  const std::array<std::tuple<const char *, Integer *, Integer *>, 7> values{{
+      {"/immediates, nonnegative", &x, &y},
+      {"/immediates, positive", &negativeX, &y},
+      {"/immediates, negative", &negativeX, &negativeY},
+      {"/shared heap, immediate, positive", &heapX, &y},
+      {"/shared heap, immediate, negative", &heapX, &negativeY},
+      {"/shared heaps, positive", &heapX, &heapY},
+      {"/shared heaps, negative", &heapX, &negativeHeapY},
+  }};
+  for (auto [name, op] :
+       {std::pair{"gmp edivsi", gmpEuclideanQuotient}, {"gmp emodsi", mpz_mod}})
+    for (auto [label, lhs, rhs] : values)
+      benchmark::RegisterBenchmark(std::string(name) + label, gmpBinary, op,
+                                   lhs->value, rhs->value);
+}
+
 // Truncations to i64 of borrowed integers, and GMP reading the low word with
 // and without a range check.
 void registerTruncations() {
@@ -650,6 +726,7 @@ void registerOthers() {
 
 [[maybe_unused]] const int registered =
     (registerBinaries(), registerMonus(), registerUnaries(), registerShifts(),
-     registerDivisions(), registerTruncations(), registerOthers(), 0);
+     registerDivisions(), registerEuclidean(), registerTruncations(),
+     registerOthers(), 0);
 
 } // namespace

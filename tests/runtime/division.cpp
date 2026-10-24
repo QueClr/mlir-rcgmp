@@ -26,8 +26,13 @@ RCGMP_ENTRY(void *, floordivsi)
 RCGMP_ENTRY(void *, floormodsi)
 RCGMP_ENTRY(rcgmp_mpz_qr, divremsi)
 RCGMP_ENTRY(rcgmp_mpz_qr, floordivmodsi)
+RCGMP_ENTRY(void *, edivsi)
+RCGMP_ENTRY(void *, emodsi)
+RCGMP_ENTRY(rcgmp_mpz_qr, edivmodsi)
 #undef RCGMP_ENTRY
 void *divsi_assume(void *, void *);
+rcgmp_mpz_qr edivmodsi_by_8(void *);
+rcgmp_mpz_qr edivmodsi_by_minus_8(void *);
 }
 
 namespace {
@@ -48,7 +53,7 @@ struct Rounding {
   GmpDivision oracle;
 };
 
-constexpr std::array<Rounding, 2> roundings{{
+constexpr std::array<Rounding, 3> roundings{{
     {"truncate",
      {divsi_local, divsi_atomic},
      {remsi_local, remsi_atomic},
@@ -59,6 +64,11 @@ constexpr std::array<Rounding, 2> roundings{{
      {floormodsi_local, floormodsi_atomic},
      {floordivmodsi_local, floordivmodsi_atomic},
      mpz_fdiv_qr},
+    {"euclidean",
+     {edivsi_local, edivsi_atomic},
+     {emodsi_local, emodsi_atomic},
+     {edivmodsi_local, edivmodsi_atomic},
+     gmpEuclidean},
 }};
 
 // Applies each compiled division of a rounding to lhs and rhs, the lhs shared
@@ -113,14 +123,12 @@ std::string parameterName(
 }
 
 INSTANTIATE_TEST_SUITE_P(Roundings, DivisionTest,
-                         ::testing::Combine(::testing::Values(0, 1),
+                         ::testing::Combine(::testing::Values(0, 1, 2),
                                             ::testing::ValuesIn(countings)),
                          parameterName);
 
-// Immediates around their bounds, and one to three limbs, of either sign:
-// dividends shorter than, as long as, and longer than divisors of one or more
-// limbs, with exact and inexact quotients.
-TEST_P(DivisionTest, MatchesGmpOnBoundaries) {
+// Immediates around their bounds, and one to three limbs, of either sign.
+std::vector<Integer> boundaryValues() {
   std::vector<Integer> values;
   for (long value : {0L, 1L, -1L, 2L, -2L, 7L, -7L, Handle::immediateMin,
                      Handle::immediateMax})
@@ -131,6 +139,13 @@ TEST_P(DivisionTest, MatchesGmpOnBoundaries) {
       values.push_back(value);
       values.push_back(-value);
     }
+  return values;
+}
+
+// Dividends shorter than, as long as, and longer than divisors of one or more
+// limbs, with exact and inexact quotients.
+TEST_P(DivisionTest, MatchesGmpOnBoundaries) {
+  std::vector<Integer> values = boundaryValues();
   for (const auto &[lhs, rhs, shared] :
        std::views::cartesian_product(values, values, std::array{false, true}))
     if (rhs.sign())
@@ -178,9 +193,26 @@ TEST(DivisionDeathTest, TerminatesOnZeroDivisor) {
       floormodsi_atomic(toRuntime(Integer::powerOfTwo(2 * word)), zero), "");
   EXPECT_DEATH(divremsi_local(Handle::immediate(-5).pointer(), zero), "");
   EXPECT_DEATH(rcgmp_mpz_fdiv_r(Handle::immediate(5).pointer(), zero, 0), "");
+  EXPECT_DEATH(edivmodsi_atomic(Handle::immediate(-5).pointer(), zero), "");
   // The runtime still checks a divisor assumed nonzero.
   EXPECT_DEATH(divsi_assume(toRuntime(Integer::powerOfTwo(2 * word)), zero),
                "");
+}
+
+// Constant power-of-two divisors of either sign, which lower differently.
+TEST(Division, DividesByConstantPowersOfTwo) {
+  for (const Integer &lhs : boundaryValues())
+    for (auto [divide, divisor] :
+         {std::pair{edivmodsi_by_8, 8L}, {edivmodsi_by_minus_8, -8L}}) {
+      SCOPED_TRACE(lhs.hex() + " / " + std::to_string(divisor));
+      Integer quotient, remainder;
+      gmpEuclidean(quotient, remainder, lhs, Integer(divisor));
+      auto [q, r] = divide(toRuntime(lhs));
+      EXPECT_THAT(q, Represents(quotient));
+      EXPECT_THAT(r, Represents(remainder));
+      rcgmp_mpz_release(q, 0);
+      rcgmp_mpz_release(r, 0);
+    }
 }
 
 TEST(Division, AssumesNonzeroDivisor) {

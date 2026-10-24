@@ -14,7 +14,7 @@ import :mpz;
 
 namespace rcgmp {
 
-export enum class Rounding : bool { truncate, floor };
+export enum class Rounding { truncate, floor, euclidean };
 
 // The results of a division. One that was not requested is zero.
 export struct Division {
@@ -35,7 +35,8 @@ inline Handle fromInteger(std::intptr_t value) {
 // Divides lhs by rhs, computing the requested results. Truncating division
 // rounds the quotient toward zero, and the remainder has the sign of lhs.
 // Floor division rounds it toward negative infinity, and the remainder has the
-// sign of rhs. A zero divisor terminates the program.
+// sign of rhs. Euclidean division rounds it so that the remainder is
+// nonnegative. A zero divisor terminates the program.
 export template <Counting counting, Rounding rounding, bool wantQuotient,
                  bool wantRemainder>
 Division divide(Handle lhs, Handle rhs, Reuse reuse) {
@@ -52,6 +53,10 @@ Division divide(Handle lhs, Handle rhs, Reuse reuse) {
       --quotient;
       remainder += y;
     }
+    if (rounding == Rounding::euclidean && remainder < 0) {
+      quotient -= y < 0 ? -1 : 1;
+      remainder += y < 0 ? -y : y;
+    }
     if (wantQuotient)
       result.quotient = fromInteger(quotient);
     if (wantRemainder)
@@ -63,10 +68,23 @@ Division divide(Handle lhs, Handle rhs, Reuse reuse) {
     std::abort();
   std::size_t nn = n.count(), dn = d.count();
   bool negative = n.negative != d.negative;
-  // Floor division moves an inexact negative quotient down by one, and its
-  // remainder by one divisor, which gives the remainder the divisor's sign.
+  // Floor division moves an inexact negative quotient down by one, and
+  // Euclidean division moves the inexact quotient of a negative dividend away
+  // from zero. Either takes the remainder's magnitude from that of the
+  // divisor, the floored remainder with the divisor's sign and the Euclidean
+  // one nonnegative.
   auto adjusts = [&](bool inexact) {
-    return rounding == Rounding::floor && negative && inexact;
+    switch (rounding) {
+    case Rounding::truncate:
+      return false;
+    case Rounding::floor:
+      return negative && inexact;
+    case Rounding::euclidean:
+      return n.negative && inexact;
+    }
+  };
+  auto remainderNegative = [&](bool adjust) {
+    return adjust ? rounding == Rounding::floor && d.negative : n.negative;
   };
   const Limb *np = n.limbs.data(), *dp = d.limbs.data();
   // Whether an operand's reference passed to a result, which then holds or
@@ -78,9 +96,9 @@ Division divide(Handle lhs, Handle rhs, Reuse reuse) {
   };
 
   if (nn < dn) {
-    // The quotient is zero, or -1 after adjustment.
+    // The quotient is zero, or one of its sign after adjustment.
     bool adjust = adjusts(nn != 0);
-    result.quotient = Handle::immediate(adjust ? -1 : 0);
+    result.quotient = Handle::immediate(adjust ? negative ? -1 : 1 : 0);
     if (wantRemainder && !adjust) {
       result.remainder = lhs;
       keepLhs = true;
@@ -94,7 +112,7 @@ Division divide(Handle lhs, Handle rhs, Reuse reuse) {
       Limb borrow = mpn_sub_n(rp, dp, np, nn);
       if (dn > nn)
         mpn_sub_1(rp + nn, dp + nn, dn - nn, borrow);
-      out.setMagnitude(dn, d.negative);
+      out.setMagnitude(dn, remainderNegative(true));
       result.remainder = normalize<counting>(out);
     }
   } else if (dn == 1) {
@@ -120,16 +138,15 @@ Division divide(Handle lhs, Handle rhs, Reuse reuse) {
       result.quotient = normalize<counting>(*quotient);
     }
     if constexpr (wantRemainder) {
-      bool remainderNegative = adjust ? d.negative : n.negative;
-      if (std::optional<Handle> small =
-              Handle::immediate(rest, remainderNegative)) {
+      bool sign = remainderNegative(adjust);
+      if (std::optional<Handle> small = Handle::immediate(rest, sign)) {
         result.remainder = *small;
       } else {
         Mpz &out = reuse.rhs                    ? take(keepRhs, rhs)
                    : reuse.lhs && !wantQuotient ? take(keepLhs, lhs)
                                                 : allocateResult(1);
         out.limbs()[0] = rest;
-        out.setMagnitude(1, remainderNegative);
+        out.setMagnitude(1, sign);
         result.remainder = Handle(out);
       }
     }
@@ -163,7 +180,7 @@ Division divide(Handle lhs, Handle rhs, Reuse reuse) {
     }
     if (wantRemainder) {
       keepLhs = reuse.lhs;
-      remainder->setMagnitude(dn, adjust ? d.negative : n.negative);
+      remainder->setMagnitude(dn, remainderNegative(adjust));
       result.remainder = normalize<counting>(*remainder);
     }
   }
@@ -209,6 +226,8 @@ RCGMP_DIVISION(tdiv_q, rcgmp::Rounding::truncate, true, false, quotient)
 RCGMP_DIVISION(tdiv_r, rcgmp::Rounding::truncate, false, true, remainder)
 RCGMP_DIVISION(fdiv_q, rcgmp::Rounding::floor, true, false, quotient)
 RCGMP_DIVISION(fdiv_r, rcgmp::Rounding::floor, false, true, remainder)
+RCGMP_DIVISION(ediv_q, rcgmp::Rounding::euclidean, true, false, quotient)
+RCGMP_DIVISION(ediv_r, rcgmp::Rounding::euclidean, false, true, remainder)
 #undef RCGMP_DIVISION
 
 rcgmp_mpz_qr rcgmp_mpz_tdiv_qr(void *lhs, void *rhs, std::uint32_t reuse) {
@@ -235,5 +254,18 @@ rcgmp_mpz_qr rcgmp_mpz_fdiv_qr_atomic(void *lhs, void *rhs,
   return rcgmp::divisionPairEntryPoint<rcgmp::divide<
       rcgmp::Counting::atomic, rcgmp::Rounding::floor, true, true>>(lhs, rhs,
                                                                     reuse);
+}
+
+rcgmp_mpz_qr rcgmp_mpz_ediv_qr(void *lhs, void *rhs, std::uint32_t reuse) {
+  return rcgmp::divisionPairEntryPoint<rcgmp::divide<
+      rcgmp::Counting::nonatomic, rcgmp::Rounding::euclidean, true, true>>(
+      lhs, rhs, reuse);
+}
+
+rcgmp_mpz_qr rcgmp_mpz_ediv_qr_atomic(void *lhs, void *rhs,
+                                      std::uint32_t reuse) {
+  return rcgmp::divisionPairEntryPoint<rcgmp::divide<
+      rcgmp::Counting::atomic, rcgmp::Rounding::euclidean, true, true>>(
+      lhs, rhs, reuse);
 }
 }

@@ -78,6 +78,25 @@ func.func @division() -> (!rcgmp.mpz, !rcgmp.mpz, !rcgmp.mpz, !rcgmp.mpz, !rcgmp
   return %q, %r, %fq, %fr, %q2, %r2, %bound : !rcgmp.mpz, !rcgmp.mpz, !rcgmp.mpz, !rcgmp.mpz, !rcgmp.mpz, !rcgmp.mpz, !rcgmp.mpz
 }
 
+// Euclidean division leaves a nonnegative remainder whatever the signs.
+// CHECK-LABEL: func.func @euclidean
+// CHECK-DAG: %[[M4:.*]] = rcgmp.constant -4 : !rcgmp.mpz
+// CHECK-DAG: %[[ONE:.*]] = rcgmp.constant 1 : !rcgmp.mpz
+// CHECK-DAG: %[[FOUR:.*]] = rcgmp.constant 4 : !rcgmp.mpz
+// CHECK-DAG: %[[M3:.*]] = rcgmp.constant -3 : !rcgmp.mpz
+// CHECK: return %[[M4]], %[[ONE]], %[[FOUR]], %[[ONE]], %[[M3]], %[[ONE]]
+func.func @euclidean() -> (!rcgmp.mpz, !rcgmp.mpz, !rcgmp.mpz, !rcgmp.mpz, !rcgmp.mpz, !rcgmp.mpz) {
+  %m7 = rcgmp.constant -7 : !rcgmp.mpz
+  %seven = rcgmp.constant 7 : !rcgmp.mpz
+  %two = rcgmp.constant 2 : !rcgmp.mpz
+  %m2 = rcgmp.constant -2 : !rcgmp.mpz
+  %q = rcgmp.edivsi %m7, %two : !rcgmp.mpz
+  %r = rcgmp.emodsi %m7, %two : !rcgmp.mpz
+  %q2, %r2 = rcgmp.edivmodsi %m7, %m2 : !rcgmp.mpz
+  %q3, %r3 = rcgmp.edivmodsi %seven, %m2 : !rcgmp.mpz
+  return %q, %r, %q2, %r2, %q3, %r3 : !rcgmp.mpz, !rcgmp.mpz, !rcgmp.mpz, !rcgmp.mpz, !rcgmp.mpz, !rcgmp.mpz
+}
+
 // Conversions in and out, and comparisons, fold to integer constants.
 // CHECK-LABEL: func.func @conversions
 // CHECK-DAG: %[[U:.*]] = rcgmp.constant 255 : !rcgmp.mpz

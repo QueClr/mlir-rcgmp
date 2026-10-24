@@ -150,11 +150,12 @@ void checkShifts(const Integer &x, unsigned amount) {
 // Every division, which is not folded by zero.
 void checkDivisions(const Integer &x, const Integer &y) {
   Folder folder;
-  Integer tq, tr, fq, fr;
+  Integer tq, tr, fq, fr, eq, er;
   bool zero = !y.sign();
   if (!zero) {
     mpz_tdiv_qr(tq, tr, x, y);
     mpz_fdiv_qr(fq, fr, x, y);
+    ::rcgmp::test::gmpEuclidean(eq, er, x, y);
   }
   auto expect = [&](Value value, const Integer &expected, const char *name) {
     std::optional<Integer> folded = mpzValue(value);
@@ -184,6 +185,16 @@ void checkDivisions(const Integer &x, const Integer &y) {
       type, type, folder.mpz(x), folder.mpz(y));
   expect(floored[0], fq, "floordivmodsi quotient");
   expect(floored[1], fr, "floordivmodsi remainder");
+  expect(
+      folder.fold<mlir::rcgmp::EDivSIOp>(type, folder.mpz(x), folder.mpz(y))[0],
+      eq, "edivsi");
+  expect(
+      folder.fold<mlir::rcgmp::EModSIOp>(type, folder.mpz(x), folder.mpz(y))[0],
+      er, "emodsi");
+  auto euclidean = folder.fold<mlir::rcgmp::EDivModSIOp>(
+      type, type, folder.mpz(x), folder.mpz(y));
+  expect(euclidean[0], eq, "edivmodsi quotient");
+  expect(euclidean[1], er, "edivmodsi remainder");
 }
 
 void checkComparisons(const Integer &x, const Integer &y) {

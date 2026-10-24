@@ -48,3 +48,27 @@ func.func @floordivmodsi_atomic(%x: !rcgmp.mpz<atomic>, %y: !rcgmp.mpz<atomic>) 
   %q, %r = rcgmp.floordivmodsi %x, %y : !rcgmp.mpz<atomic>
   return %q, %r : !rcgmp.mpz<atomic>, !rcgmp.mpz<atomic>
 }
+func.func @edivsi_local(%x: !rcgmp.mpz, %y: !rcgmp.mpz) -> !rcgmp.mpz {
+  %r = rcgmp.edivsi %x, %y : !rcgmp.mpz
+  return %r : !rcgmp.mpz
+}
+func.func @edivsi_atomic(%x: !rcgmp.mpz<atomic>, %y: !rcgmp.mpz<atomic>) -> !rcgmp.mpz<atomic> {
+  %r = rcgmp.edivsi %x, %y : !rcgmp.mpz<atomic>
+  return %r : !rcgmp.mpz<atomic>
+}
+func.func @emodsi_local(%x: !rcgmp.mpz, %y: !rcgmp.mpz) -> !rcgmp.mpz {
+  %r = rcgmp.emodsi %x, %y : !rcgmp.mpz
+  return %r : !rcgmp.mpz
+}
+func.func @emodsi_atomic(%x: !rcgmp.mpz<atomic>, %y: !rcgmp.mpz<atomic>) -> !rcgmp.mpz<atomic> {
+  %r = rcgmp.emodsi %x, %y : !rcgmp.mpz<atomic>
+  return %r : !rcgmp.mpz<atomic>
+}
+func.func @edivmodsi_local(%x: !rcgmp.mpz, %y: !rcgmp.mpz) -> (!rcgmp.mpz, !rcgmp.mpz) {
+  %q, %r = rcgmp.edivmodsi %x, %y : !rcgmp.mpz
+  return %q, %r : !rcgmp.mpz, !rcgmp.mpz
+}
+func.func @edivmodsi_atomic(%x: !rcgmp.mpz<atomic>, %y: !rcgmp.mpz<atomic>) -> (!rcgmp.mpz<atomic>, !rcgmp.mpz<atomic>) {
+  %q, %r = rcgmp.edivmodsi %x, %y : !rcgmp.mpz<atomic>
+  return %q, %r : !rcgmp.mpz<atomic>, !rcgmp.mpz<atomic>
+}

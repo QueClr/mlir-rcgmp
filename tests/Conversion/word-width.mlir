@@ -135,8 +135,8 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<!llvm.ptr, dense<
   // The quotient's range check follows the handle width.
   // CHECK-LABEL: llvm.func @div
   // CHECK: llvm.sdiv {{.*}} : i32
-  // CHECK: llvm.mlir.constant(536870911 : i32)
-  // CHECK: llvm.icmp "sle"
+  // CHECK: llvm.mlir.constant(-536870912 : i32)
+  // CHECK: llvm.icmp "ne"
   // CHECK: llvm.call @rcgmp_mpz_tdiv_q({{.*}}) : (!llvm.ptr, !llvm.ptr, i32)
   func.func @div(%x: !rcgmp.mpz, %y: !rcgmp.mpz) -> !rcgmp.mpz {
     %r = rcgmp.divsi %x, %y : !rcgmp.mpz

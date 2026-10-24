@@ -464,9 +464,11 @@ struct ShRSILowering : FastPathLowering<ShRSILowering> {
   }
 };
 
+enum class Rounding { truncate, floor, euclidean };
+
 // Divides immediates, producing the quotient, the remainder, or both, rounded
-// toward zero or toward negative infinity.
-template <typename Derived, bool floor, bool quotient, bool remainder>
+// toward zero, toward negative infinity, or to a nonnegative remainder.
+template <typename Derived, Rounding rounding, bool quotient, bool remainder>
 struct DivisionLowering : FastPathLowering<Derived> {
   using FastPathLowering<Derived>::FastPathLowering;
 
@@ -479,6 +481,14 @@ struct DivisionLowering : FastPathLowering<Derived> {
                                           type.getWidth());
     };
     Value two = constant(2), zero = constant(0);
+    // Euclidean division by a positive divisor is floored division, which
+    // LLVM reduces to shifts and masks for a power of two.
+    Rounding mode = rounding;
+    if (auto divisor = op->getOperand(1).getDefiningOp<ConstantOp>();
+        mode == Rounding::euclidean && divisor &&
+        divisor.getValue().isStrictlyPositive() &&
+        divisor.getValue().isPowerOf2())
+      mode = Rounding::floor;
     // Untagging any bits leaves a value above the signed word minimum, so
     // dividing it by -1 never overflows the word.
     Value x = arith::ShRSIOp::create(rewriter, loc, lhs, two);
@@ -493,9 +503,36 @@ struct DivisionLowering : FastPathLowering<Derived> {
       y = arith::SelectOp::create(rewriter, loc, nonzero, y, constant(1));
       valid = arith::AndIOp::create(rewriter, loc, valid, nonzero);
     }
-    Value q = arith::DivSIOp::create(rewriter, loc, x, y);
-    Value r = arith::RemSIOp::create(rewriter, loc, x, y);
-    if (floor) {
+    Value q, r;
+    if (mode == Rounding::euclidean) {
+      // Unsigned division is faster than signed division. It divides x, or
+      // |x| - 1 = ~x for a negative x, by |y|, giving q and r. The Euclidean
+      // quotient is then q, -q, ~q = -q - 1, or q + 1 as x and y are
+      // nonnegative, y alone is negative, x alone is, or both are: q
+      // complemented when the signs differ, minus the sign mask of y. The
+      // remainder is r, or |y| - 1 - r for a negative x.
+      Value width = constant(type.getWidth() - 1);
+      Value xSign = arith::ShRSIOp::create(rewriter, loc, x, width);
+      Value ySign = arith::ShRSIOp::create(rewriter, loc, y, width);
+      Value a = arith::XOrIOp::create(rewriter, loc, x, xSign);
+      Value b = arith::SubIOp::create(
+          rewriter, loc, arith::XOrIOp::create(rewriter, loc, y, ySign), ySign);
+      q = arith::DivUIOp::create(rewriter, loc, a, b);
+      r = arith::RemUIOp::create(rewriter, loc, a, b);
+      q = arith::SubIOp::create(
+          rewriter, loc,
+          arith::XOrIOp::create(
+              rewriter, loc, q,
+              arith::XOrIOp::create(rewriter, loc, xSign, ySign)),
+          ySign);
+      r = arith::AddIOp::create(rewriter, loc,
+                                arith::XOrIOp::create(rewriter, loc, r, xSign),
+                                arith::AndIOp::create(rewriter, loc, b, xSign));
+    } else {
+      q = arith::DivSIOp::create(rewriter, loc, x, y);
+      r = arith::RemSIOp::create(rewriter, loc, x, y);
+    }
+    if (mode == Rounding::floor) {
       // A nonzero remainder whose sign differs from the divisor's moves the
       // quotient down by one and the remainder by one divisor.
       auto inexact = arith::CmpIOp::create(rewriter, loc,
@@ -518,13 +555,18 @@ struct DivisionLowering : FastPathLowering<Derived> {
     FastPath fast;
     if (quotient) {
       // Only the quotient of the immediate minimum by -1 leaves the immediate
-      // range; remainders are smaller than the divisor.
-      auto maximum = arith::ConstantOp::create(
+      // range; remainders are smaller than the divisor. Testing the operands
+      // rather than the quotient leaves the division to the fast path.
+      auto minimum = arith::ConstantOp::create(
           rewriter, loc,
           rewriter.getIntegerAttr(
-              type, APInt::getSignedMaxValue(type.getWidth()).ashr(2)));
-      auto fits = arith::CmpIOp::create(rewriter, loc,
-                                        arith::CmpIPredicate::sle, q, maximum);
+              type, APInt::getSignedMinValue(type.getWidth()).ashr(2)));
+      auto fits = arith::OrIOp::create(
+          rewriter, loc,
+          arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::ne, x,
+                                minimum),
+          arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::ne, y,
+                                constant(-1)));
       valid = arith::AndIOp::create(rewriter, loc, valid, fits);
       fast.values.push_back(tag(q));
     }
@@ -535,7 +577,8 @@ struct DivisionLowering : FastPathLowering<Derived> {
   }
 };
 
-struct DivSILowering : DivisionLowering<DivSILowering, false, true, false> {
+struct DivSILowering
+    : DivisionLowering<DivSILowering, Rounding::truncate, true, false> {
   using DivisionLowering::DivisionLowering;
   using Op = DivSIOp;
 
@@ -544,7 +587,8 @@ struct DivSILowering : DivisionLowering<DivSILowering, false, true, false> {
   }
 };
 
-struct RemSILowering : DivisionLowering<RemSILowering, false, false, true> {
+struct RemSILowering
+    : DivisionLowering<RemSILowering, Rounding::truncate, false, true> {
   using DivisionLowering::DivisionLowering;
   using Op = RemSIOp;
 
@@ -554,7 +598,7 @@ struct RemSILowering : DivisionLowering<RemSILowering, false, false, true> {
 };
 
 struct FloorDivSILowering
-    : DivisionLowering<FloorDivSILowering, true, true, false> {
+    : DivisionLowering<FloorDivSILowering, Rounding::floor, true, false> {
   using DivisionLowering::DivisionLowering;
   using Op = FloorDivSIOp;
 
@@ -564,7 +608,7 @@ struct FloorDivSILowering
 };
 
 struct FloorModSILowering
-    : DivisionLowering<FloorModSILowering, true, false, true> {
+    : DivisionLowering<FloorModSILowering, Rounding::floor, false, true> {
   using DivisionLowering::DivisionLowering;
   using Op = FloorModSIOp;
 
@@ -574,7 +618,7 @@ struct FloorModSILowering
 };
 
 struct DivRemSILowering
-    : DivisionLowering<DivRemSILowering, false, true, true> {
+    : DivisionLowering<DivRemSILowering, Rounding::truncate, true, true> {
   using DivisionLowering::DivisionLowering;
   using Op = DivRemSIOp;
 
@@ -584,12 +628,42 @@ struct DivRemSILowering
 };
 
 struct FloorDivModSILowering
-    : DivisionLowering<FloorDivModSILowering, true, true, true> {
+    : DivisionLowering<FloorDivModSILowering, Rounding::floor, true, true> {
   using DivisionLowering::DivisionLowering;
   using Op = FloorDivModSIOp;
 
   static StringRef getRuntimeName(bool atomic) {
     return atomic ? "rcgmp_mpz_fdiv_qr_atomic" : "rcgmp_mpz_fdiv_qr";
+  }
+};
+
+struct EDivSILowering
+    : DivisionLowering<EDivSILowering, Rounding::euclidean, true, false> {
+  using DivisionLowering::DivisionLowering;
+  using Op = EDivSIOp;
+
+  static StringRef getRuntimeName(bool atomic) {
+    return atomic ? "rcgmp_mpz_ediv_q_atomic" : "rcgmp_mpz_ediv_q";
+  }
+};
+
+struct EModSILowering
+    : DivisionLowering<EModSILowering, Rounding::euclidean, false, true> {
+  using DivisionLowering::DivisionLowering;
+  using Op = EModSIOp;
+
+  static StringRef getRuntimeName(bool atomic) {
+    return atomic ? "rcgmp_mpz_ediv_r_atomic" : "rcgmp_mpz_ediv_r";
+  }
+};
+
+struct EDivModSILowering
+    : DivisionLowering<EDivModSILowering, Rounding::euclidean, true, true> {
+  using DivisionLowering::DivisionLowering;
+  using Op = EDivModSIOp;
+
+  static StringRef getRuntimeName(bool atomic) {
+    return atomic ? "rcgmp_mpz_ediv_qr_atomic" : "rcgmp_mpz_ediv_qr";
   }
 };
 
@@ -932,22 +1006,23 @@ struct ConvertRCGMPToSCFPass
   }
   void runOnOperation() override {
     RewritePatternSet patterns(&getContext());
-    patterns.add<
-        ConstantLowering, ExtSILowering, ExtUILowering, RetainLowering,
-        ReleaseLowering, AddILowering, SubILowering, MonusILowering,
-        MulILowering, AndILowering, XOrILowering, OrILowering, NotILowering,
-        NegILowering, AbsILowering, ShLILowering, ShRSILowering, DivSILowering,
-        RemSILowering, FloorDivSILowering, FloorModSILowering, DivRemSILowering,
-        FloorDivModSILowering, CmpILowering, TruncationLowering<TruncIOp>,
-        TruncationLowering<TruncIOverflowOp>>(&getContext());
+    patterns.add<ConstantLowering, ExtSILowering, ExtUILowering, RetainLowering,
+                 ReleaseLowering, AddILowering, SubILowering, MonusILowering,
+                 MulILowering, AndILowering, XOrILowering, OrILowering,
+                 NotILowering, NegILowering, AbsILowering, ShLILowering,
+                 ShRSILowering, DivSILowering, RemSILowering,
+                 FloorDivSILowering, FloorModSILowering, DivRemSILowering,
+                 FloorDivModSILowering, EDivSILowering, EModSILowering,
+                 EDivModSILowering, CmpILowering, TruncationLowering<TruncIOp>,
+                 TruncationLowering<TruncIOverflowOp>>(&getContext());
     populateMatchLoweringPatterns(patterns);
     ConversionTarget target(getContext());
-    target
-        .addIllegalOp<ConstantOp, ExtSIOp, ExtUIOp, RetainOp, ReleaseOp, AddIOp,
-                      SubIOp, MonusIOp, MulIOp, AndIOp, XOrIOp, OrIOp, NotIOp,
-                      NegIOp, AbsIOp, ShLIOp, ShRSIOp, DivSIOp, RemSIOp,
-                      FloorDivSIOp, FloorModSIOp, DivRemSIOp, FloorDivModSIOp,
-                      CmpIOp, TruncIOp, TruncIOverflowOp, MatchOp, YieldOp>();
+    target.addIllegalOp<ConstantOp, ExtSIOp, ExtUIOp, RetainOp, ReleaseOp,
+                        AddIOp, SubIOp, MonusIOp, MulIOp, AndIOp, XOrIOp, OrIOp,
+                        NotIOp, NegIOp, AbsIOp, ShLIOp, ShRSIOp, DivSIOp,
+                        RemSIOp, FloorDivSIOp, FloorModSIOp, DivRemSIOp,
+                        FloorDivModSIOp, EDivSIOp, EModSIOp, EDivModSIOp,
+                        CmpIOp, TruncIOp, TruncIOverflowOp, MatchOp, YieldOp>();
     target.markUnknownOpDynamicallyLegal([](Operation *) { return true; });
     if (failed(applyPartialConversion(getOperation(), target,
                                       std::move(patterns))))

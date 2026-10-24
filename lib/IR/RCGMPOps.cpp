@@ -239,11 +239,16 @@ OpFoldResult ShRSIOp::fold(FoldAdaptor adaptor) {
   return foldedMpz(getContext(), value->ashr(*amount));
 }
 
-// The quotient and remainder of constant operands, rounded toward zero or
-// toward negative infinity. A zero divisor is not folded: without
-// assume_nonzero it terminates the program, and with it it is undefined.
+namespace {
+enum class Rounding { truncate, floor, euclidean };
+} // namespace
+
+// The quotient and remainder of constant operands, rounded toward zero,
+// toward negative infinity, or to a nonnegative remainder. A zero divisor is
+// not folded: without assume_nonzero it terminates the program, and with it
+// it is undefined.
 static std::optional<std::pair<APInt, APInt>>
-divideConstants(ArrayRef<Attribute> operands, bool floor) {
+divideConstants(ArrayRef<Attribute> operands, Rounding rounding) {
   std::optional<APInt> lhs = mpzOperand(operands[0]),
                        rhs = mpzOperand(operands[1]);
   if (!lhs || !rhs || rhs->isZero())
@@ -252,17 +257,32 @@ divideConstants(ArrayRef<Attribute> operands, bool floor) {
   auto [a, b] = widened(*lhs, *rhs, 1);
   APInt quotient, remainder;
   APInt::sdivrem(a, b, quotient, remainder);
-  if (floor && !remainder.isZero() &&
-      remainder.isNegative() != b.isNegative()) {
+  bool adjust = false;
+  switch (rounding) {
+  case Rounding::truncate:
+    break;
+  case Rounding::floor:
+    adjust = !remainder.isZero() && remainder.isNegative() != b.isNegative();
+    break;
+  case Rounding::euclidean:
+    adjust = remainder.isNegative();
+    break;
+  }
+  // The quotient moves down by one and the remainder up by one divisor,
+  // except that a Euclidean remainder rises by the divisor's magnitude.
+  if (adjust && (rounding == Rounding::floor || !b.isNegative())) {
     quotient -= 1;
     remainder += b;
+  } else if (adjust) {
+    quotient += 1;
+    remainder -= b;
   }
   return std::pair(quotient, remainder);
 }
 
-template <bool floor, bool quotient>
+template <Rounding rounding, bool quotient>
 static OpFoldResult foldDivision(Operation *op, ArrayRef<Attribute> operands) {
-  auto results = divideConstants(operands, floor);
+  auto results = divideConstants(operands, rounding);
   if (!results)
     return {};
   return foldedMpz(op->getContext(),
@@ -270,26 +290,34 @@ static OpFoldResult foldDivision(Operation *op, ArrayRef<Attribute> operands) {
 }
 
 OpFoldResult DivSIOp::fold(FoldAdaptor adaptor) {
-  return foldDivision<false, true>(*this, adaptor.getOperands());
+  return foldDivision<Rounding::truncate, true>(*this, adaptor.getOperands());
 }
 
 OpFoldResult RemSIOp::fold(FoldAdaptor adaptor) {
-  return foldDivision<false, false>(*this, adaptor.getOperands());
+  return foldDivision<Rounding::truncate, false>(*this, adaptor.getOperands());
 }
 
 OpFoldResult FloorDivSIOp::fold(FoldAdaptor adaptor) {
-  return foldDivision<true, true>(*this, adaptor.getOperands());
+  return foldDivision<Rounding::floor, true>(*this, adaptor.getOperands());
 }
 
 OpFoldResult FloorModSIOp::fold(FoldAdaptor adaptor) {
-  return foldDivision<true, false>(*this, adaptor.getOperands());
+  return foldDivision<Rounding::floor, false>(*this, adaptor.getOperands());
 }
 
-template <bool floor>
+OpFoldResult EDivSIOp::fold(FoldAdaptor adaptor) {
+  return foldDivision<Rounding::euclidean, true>(*this, adaptor.getOperands());
+}
+
+OpFoldResult EModSIOp::fold(FoldAdaptor adaptor) {
+  return foldDivision<Rounding::euclidean, false>(*this, adaptor.getOperands());
+}
+
+template <Rounding rounding>
 static LogicalResult foldDivisionPair(Operation *op,
                                       ArrayRef<Attribute> operands,
                                       SmallVectorImpl<OpFoldResult> &results) {
-  auto divided = divideConstants(operands, floor);
+  auto divided = divideConstants(operands, rounding);
   if (!divided)
     return failure();
   results.push_back(foldedMpz(op->getContext(), divided->first));
@@ -299,12 +327,20 @@ static LogicalResult foldDivisionPair(Operation *op,
 
 LogicalResult DivRemSIOp::fold(FoldAdaptor adaptor,
                                SmallVectorImpl<OpFoldResult> &results) {
-  return foldDivisionPair<false>(*this, adaptor.getOperands(), results);
+  return foldDivisionPair<Rounding::truncate>(*this, adaptor.getOperands(),
+                                              results);
 }
 
 LogicalResult FloorDivModSIOp::fold(FoldAdaptor adaptor,
                                     SmallVectorImpl<OpFoldResult> &results) {
-  return foldDivisionPair<true>(*this, adaptor.getOperands(), results);
+  return foldDivisionPair<Rounding::floor>(*this, adaptor.getOperands(),
+                                           results);
+}
+
+LogicalResult EDivModSIOp::fold(FoldAdaptor adaptor,
+                                SmallVectorImpl<OpFoldResult> &results) {
+  return foldDivisionPair<Rounding::euclidean>(*this, adaptor.getOperands(),
+                                               results);
 }
 
 OpFoldResult CmpIOp::fold(FoldAdaptor adaptor) {

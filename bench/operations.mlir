@@ -224,6 +224,36 @@ func.func @floormodsi(%x: !rcgmp.mpz, %y: !rcgmp.mpz) -> !rcgmp.mpz {
   %r = rcgmp.floormodsi %x, %y : !rcgmp.mpz
   return %r : !rcgmp.mpz
 }
+func.func @edivsi(%x: !rcgmp.mpz, %y: !rcgmp.mpz) -> !rcgmp.mpz {
+  %r = rcgmp.edivsi %x, %y : !rcgmp.mpz
+  return %r : !rcgmp.mpz
+}
+func.func @emodsi(%x: !rcgmp.mpz, %y: !rcgmp.mpz) -> !rcgmp.mpz {
+  %r = rcgmp.emodsi %x, %y : !rcgmp.mpz
+  return %r : !rcgmp.mpz
+}
+// Euclidean division and remainder composed from floored ones: the quotient
+// by a negative divisor is the negated quotient by its magnitude, and the
+// remainder is the floored remainder by the magnitude.
+func.func @composed_edivsi(%x: !rcgmp.mpz, %y: !rcgmp.mpz) -> !rcgmp.mpz {
+  %zero = rcgmp.constant 0 : !rcgmp.mpz
+  %positive = rcgmp.cmpi sgt, %y, %zero : !rcgmp.mpz
+  %r = scf.if %positive -> !rcgmp.mpz {
+    %q = rcgmp.floordivsi %x, %y : !rcgmp.mpz
+    scf.yield %q : !rcgmp.mpz
+  } else {
+    %m = rcgmp.negi %y : !rcgmp.mpz
+    %q = rcgmp.floordivsi %x, %m : !rcgmp.mpz
+    %n = rcgmp.negi %q : !rcgmp.mpz
+    scf.yield %n : !rcgmp.mpz
+  }
+  return %r : !rcgmp.mpz
+}
+func.func @composed_emodsi(%x: !rcgmp.mpz, %y: !rcgmp.mpz) -> !rcgmp.mpz {
+  %m = rcgmp.absi %y : !rcgmp.mpz
+  %r = rcgmp.floormodsi %x, %m : !rcgmp.mpz
+  return %r : !rcgmp.mpz
+}
 func.func @divremsi(%x: !rcgmp.mpz, %y: !rcgmp.mpz) -> (!rcgmp.mpz, !rcgmp.mpz) {
   %q, %r = rcgmp.divremsi %x, %y : !rcgmp.mpz
   return %q, %r : !rcgmp.mpz, !rcgmp.mpz

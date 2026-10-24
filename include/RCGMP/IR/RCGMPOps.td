@@ -266,6 +266,21 @@ def RCGMP_FloorModSIOp : RCGMP_DivisionOp<"floormodsi", [{
   let summary = "Consume two integer references and produce their floored remainder";
 }
 
+def RCGMP_EDivSIOp : RCGMP_DivisionOp<"edivsi", [{
+    The quotient is rounded toward negative infinity for a positive rhs and
+    toward positive infinity for a negative rhs, so that the remainder is
+    nonnegative.
+  }]> {
+  let summary = "Consume two integer references and produce their Euclidean quotient";
+}
+
+def RCGMP_EModSIOp : RCGMP_DivisionOp<"emodsi", [{
+    The remainder of the Euclidean quotient is nonnegative and less than the
+    magnitude of rhs.
+  }]> {
+  let summary = "Consume two integer references and produce their Euclidean remainder";
+}
+
 class RCGMP_DivisionPairOp<string name, string semantics>
     : RCGMPOp<name, [SameOperandsAndResultType, RCGMP_NotSpeculatable]> {
   let arguments = RCGMP_DivisionArguments;
@@ -290,6 +305,13 @@ def RCGMP_FloorDivModSIOp : RCGMP_DivisionPairOp<"floordivmodsi", [{
     sign of rhs, as `rcgmp.floordivsi` and `rcgmp.floormodsi` compute them.
   }]> {
   let summary = "Consume two integer references and produce their floored quotient and remainder";
+}
+
+def RCGMP_EDivModSIOp : RCGMP_DivisionPairOp<"edivmodsi", [{
+    The remainder is nonnegative and less than the magnitude of rhs, as
+    `rcgmp.edivsi` and `rcgmp.emodsi` compute them.
+  }]> {
+  let summary = "Consume two integer references and produce their Euclidean quotient and remainder";
 }
 
 def RCGMP_CmpIOp : RCGMPOp<"cmpi", [SameTypeOperands, RCGMP_NotSpeculatable]> {

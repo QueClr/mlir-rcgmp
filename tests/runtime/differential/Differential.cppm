@@ -60,6 +60,12 @@ rcgmp_mpz_qr divremsi_local(void *, void *);
 rcgmp_mpz_qr divremsi_atomic(void *, void *);
 rcgmp_mpz_qr floordivmodsi_local(void *, void *);
 rcgmp_mpz_qr floordivmodsi_atomic(void *, void *);
+void *edivsi_local(void *, void *);
+void *edivsi_atomic(void *, void *);
+void *emodsi_local(void *, void *);
+void *emodsi_atomic(void *, void *);
+rcgmp_mpz_qr edivmodsi_local(void *, void *);
+rcgmp_mpz_qr edivmodsi_atomic(void *, void *);
 void *retain_local(void *);
 void *retain_atomic(void *);
 void release_local(void *);
@@ -270,7 +276,10 @@ enum class DivisionOperator {
   floordivsi,
   floormodsi,
   divremsi,
-  floordivmodsi
+  floordivmodsi,
+  edivsi,
+  emodsi,
+  edivmodsi
 };
 
 // The compiled and runtime entry points of a division, indexed by counting,
@@ -286,7 +295,7 @@ struct DivisionOperation {
   void (*oracle)(mpz_ptr, mpz_ptr, mpz_srcptr, mpz_srcptr);
 };
 
-constexpr std::array<DivisionOperation, 6> divisionOperations{{
+constexpr std::array<DivisionOperation, 9> divisionOperations{{
     {"divsi",
      true,
      false,
@@ -335,12 +344,38 @@ constexpr std::array<DivisionOperation, 6> divisionOperations{{
      {floordivmodsi_local, floordivmodsi_atomic},
      {rcgmp_mpz_fdiv_qr, rcgmp_mpz_fdiv_qr_atomic},
      mpz_fdiv_qr},
+    {"edivsi",
+     true,
+     false,
+     {edivsi_local, edivsi_atomic},
+     {rcgmp_mpz_ediv_q, rcgmp_mpz_ediv_q_atomic},
+     {},
+     {},
+     gmpEuclidean},
+    {"emodsi",
+     false,
+     true,
+     {emodsi_local, emodsi_atomic},
+     {rcgmp_mpz_ediv_r, rcgmp_mpz_ediv_r_atomic},
+     {},
+     {},
+     gmpEuclidean},
+    {"edivmodsi",
+     true,
+     true,
+     {},
+     {},
+     {edivmodsi_local, edivmodsi_atomic},
+     {rcgmp_mpz_ediv_qr, rcgmp_mpz_ediv_qr_atomic},
+     gmpEuclidean},
 }};
 
 constexpr std::array divisionOperators{
     DivisionOperator::divsi,      DivisionOperator::remsi,
     DivisionOperator::floordivsi, DivisionOperator::floormodsi,
-    DivisionOperator::divremsi,   DivisionOperator::floordivmodsi};
+    DivisionOperator::divremsi,   DivisionOperator::floordivmodsi,
+    DivisionOperator::edivsi,     DivisionOperator::emodsi,
+    DivisionOperator::edivmodsi};
 
 const DivisionOperation &operation(DivisionOperator op) {
   return divisionOperations[std::to_underlying(op)];
