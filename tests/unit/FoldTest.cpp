@@ -375,7 +375,8 @@ void checkLimbs(const Integer &x) {
   }
 }
 
-// Folded rounding matches the runtime.
+// Folded rounding matches the runtime, and folded truncation of the rounded
+// value is exact.
 void checkFloating(const Integer &x) {
   Folder folder;
   void *runtime = ::rcgmp::test::toRuntime(x);
@@ -389,6 +390,14 @@ void checkFloating(const Integer &x) {
     EXPECT_EQ(type.isF32() ? value.convertToFloat() : value.convertToDouble(),
               expected)
         << "sitofp " << x;
+    if (!value.isFinite())
+      continue;
+    Integer truncated;
+    mpz_set_d(truncated, expected);
+    EXPECT_EQ(mpzValue(folder.fold<mlir::rcgmp::FPToSIOp>(folder.mpzType(),
+                                                          folded)[0]),
+              truncated)
+        << "fptosi " << expected;
   }
   rcgmp_mpz_release(runtime, 0);
 }

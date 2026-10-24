@@ -259,17 +259,27 @@ func.func @limbs() -> (index, index, index, i64, i64, i64, i64, i64, i64) {
       : index, index, index, i64, i64, i64, i64, i64, i64
 }
 
-// Rounding is to nearest with ties to even, overflowing to infinity.
+// Rounding is to nearest with ties to even, overflowing to infinity, and
+// truncation is exact; a NaN does not fold, since it terminates the program.
 // CHECK-LABEL: func.func @floating
 // CHECK-DAG: %[[TIE:.*]] = arith.constant 0x4340000000000000 : f64
 // CHECK-DAG: %[[INF:.*]] = arith.constant 0x7F800000 : f32
-// CHECK: return %[[TIE]], %[[INF]]
-func.func @floating() -> (f64, f32) {
+// CHECK-DAG: %[[TRUNCATED:.*]] = rcgmp.constant -2 : !rcgmp.mpz
+// CHECK-DAG: %[[BIG:.*]] = rcgmp.constant 1000000015047466219876688855040 : !rcgmp.mpz
+// CHECK-DAG: %[[NAN:.*]] = rcgmp.fptosi %{{.*}} : f64 to !rcgmp.mpz
+// CHECK: return %[[TIE]], %[[INF]], %[[TRUNCATED]], %[[BIG]], %[[NAN]]
+func.func @floating() -> (f64, f32, !rcgmp.mpz, !rcgmp.mpz, !rcgmp.mpz) {
   %tie = rcgmp.constant 9007199254740993 : !rcgmp.mpz
   %huge = rcgmp.constant 340282366920938463463374607431768211456 : !rcgmp.mpz
+  %half = arith.constant -2.5 : f64
+  %big = arith.constant 1.0e30 : f32
+  %nan = arith.constant 0x7FF8000000000000 : f64
   %a = rcgmp.sitofp %tie : !rcgmp.mpz to f64
   %b = rcgmp.sitofp %huge : !rcgmp.mpz to f32
-  return %a, %b : f64, f32
+  %c = rcgmp.fptosi %half : f64 to !rcgmp.mpz
+  %d = rcgmp.fptosi %big : f32 to !rcgmp.mpz
+  %e = rcgmp.fptosi %nan : f64 to !rcgmp.mpz
+  return %a, %b, %c, %d, %e : f64, f32, !rcgmp.mpz, !rcgmp.mpz, !rcgmp.mpz
 }
 
 // Constants need no reference counting.

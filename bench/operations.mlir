@@ -585,3 +585,7 @@ func.func @sitofp(%x: !rcgmp.mpz) -> f64 {
   %f = rcgmp.sitofp %x : !rcgmp.mpz to f64
   return %f : f64
 }
+func.func @fptosi(%f: f64) -> !rcgmp.mpz {
+  %x = rcgmp.fptosi %f : f64 to !rcgmp.mpz
+  return %x : !rcgmp.mpz
+}

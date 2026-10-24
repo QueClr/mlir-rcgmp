@@ -84,6 +84,7 @@ std::int32_t testbiti(void *, std::int64_t);
 std::int32_t shifted_testbit(void *, std::int64_t);
 std::int64_t limb_sum(void *);
 double sitofp(void *);
+void *fptosi(double);
 void *gcdi(void *, void *);
 void *euclid(void *, void *);
 void *divsi_exact(void *, void *);
@@ -1044,7 +1045,8 @@ void registerLimbs() {
 }
 
 // Rounding borrowed integers to doubles, compared with GMP's truncating
-// mpz_get_d.
+// mpz_get_d, and truncating doubles to new integers, compared with
+// mpz_set_d.
 void registerFloating() {
   for (auto [label, operand] : {
            std::pair{"/immediate", RemainderOperand{smallLhs}},
@@ -1067,6 +1069,29 @@ void registerFloating() {
                                    for (auto _ : state) {
                                      benchmark::DoNotOptimize(x);
                                      benchmark::DoNotOptimize(mpz_get_d(x));
+                                   }
+                                   mpz_clear(x);
+                                 });
+  }
+  for (auto [label, value] :
+       {std::pair{"/immediate", 1234567.5}, {"/heap", 0x1.234567p100}}) {
+    benchmark::RegisterBenchmark(std::string("fptosi") + label,
+                                 [=](benchmark::State &state) {
+                                   double f = value;
+                                   for (auto _ : state) {
+                                     benchmark::DoNotOptimize(f);
+                                     rcgmp_mpz_release(fptosi(f), 0);
+                                   }
+                                 });
+    benchmark::RegisterBenchmark(std::string("gmp set_d") + label,
+                                 [=](benchmark::State &state) {
+                                   mpz_t x;
+                                   mpz_init(x);
+                                   double f = value;
+                                   for (auto _ : state) {
+                                     benchmark::DoNotOptimize(f);
+                                     mpz_set_d(x, f);
+                                     benchmark::DoNotOptimize(x);
                                    }
                                    mpz_clear(x);
                                  });

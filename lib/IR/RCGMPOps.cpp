@@ -1,4 +1,5 @@
 #include "RCGMP/IR/RCGMPOps.h"
+#include <llvm/ADT/APSInt.h>
 #include <llvm/ADT/DenseMap.h>
 #include <llvm/ADT/DenseSet.h>
 #include <llvm/ADT/StringExtras.h>
@@ -727,6 +728,19 @@ OpFoldResult SIToFPOp::fold(FoldAdaptor adaptor) {
   result.convertFromAPInt(*value, /*IsSigned=*/true,
                           APFloat::rmNearestTiesToEven);
   return FloatAttr::get(type, result);
+}
+
+OpFoldResult FPToSIOp::fold(FoldAdaptor adaptor) {
+  auto value = dyn_cast_or_null<FloatAttr>(adaptor.getValue());
+  // A NaN or an infinity terminates the program when it runs.
+  if (!value || !value.getValue().isFinite())
+    return {};
+  const llvm::fltSemantics &semantics = value.getValue().getSemantics();
+  APSInt integer(APFloat::semanticsMaxExponent(semantics) + 2,
+                 /*isUnsigned=*/false);
+  bool exact;
+  value.getValue().convertToInteger(integer, APFloat::rmTowardZero, &exact);
+  return foldedMpz(getContext(), integer);
 }
 
 // Constants need no reference counting.

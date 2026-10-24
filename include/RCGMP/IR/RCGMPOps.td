@@ -594,6 +594,23 @@ def RCGMP_SIToFPOp : RCGMPOp<"sitofp", [RCGMP_NotSpeculatable]> {
   let hasFolder = 1;
 }
 
+def RCGMP_FPToSIOp : RCGMPOp<"fptosi", [RCGMP_NotSpeculatable]> {
+  let summary = "Create one owned integer by truncating a floating-point value";
+  let description = [{
+    The result is the floating-point value rounded toward zero, which is exact
+    for every finite value, and owns one reference. A NaN or infinite operand
+    has no integer value and terminates the program.
+
+    ```mlir
+    %x = rcgmp.fptosi %f : f64 to !rcgmp.mpz
+    ```
+  }];
+  let arguments = (ins AnyTypeOf<[F32, F64]>:$value);
+  let results = (outs Res<RCGMP_MpzType, "new integer", [MemAlloc]>:$result);
+  let assemblyFormat = "$value attr-dict `:` type($value) `to` type($result)";
+  let hasFolder = 1;
+}
+
 def RCGMP_MatchOp : RCGMPOp<"match", [RCGMP_NotSpeculatable,
     RecursiveMemoryEffects, SingleBlockImplicitTerminator<"YieldOp">,
     DeclareOpInterfaceMethods<RegionBranchOpInterface, ["getSuccessorInputs"]>]> {

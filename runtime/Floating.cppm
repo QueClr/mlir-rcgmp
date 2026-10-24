@@ -3,7 +3,10 @@ module;
 #include <gmp.h>
 
 #include <algorithm>
+#include <array>
 #include <bit>
+#include <climits>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -83,6 +86,38 @@ export template <typename Float> Float toFloating(Handle value) {
   return heap.negative() ? -magnitude : magnitude;
 }
 
+// The integer a finite value truncates to, owning one reference. A NaN or an
+// infinity terminates the program.
+export Handle fromFloating(double value) {
+  if (!std::isfinite(value))
+    std::abort();
+  // A nonzero truncated magnitude is a normal value, its significand with the
+  // implicit bit times 2^shift, and an integer.
+  using Bits = FloatBits<double>;
+  constexpr int precision = significandBits<double>;
+  Bits bits = std::bit_cast<Bits>(std::fabs(std::trunc(value)));
+  if (!bits)
+    return Handle::immediate(0);
+  std::uint64_t mantissa =
+      (bits & ((Bits{1} << precision) - 1)) | (Bits{1} << precision);
+  int shift = static_cast<int>(bits >> precision) - 1023 - precision;
+  if (shift < 0) {
+    mantissa >>= -shift;
+    shift = 0;
+  }
+  constexpr std::size_t width = sizeof(std::uintptr_t) * CHAR_BIT;
+  std::array<std::uintptr_t, (1024 + 64) / width + 1> words{};
+  for (std::size_t offset = 0; offset < 64; offset += width) {
+    std::size_t index = (shift + offset) / width,
+                within = (shift + offset) % width;
+    auto part = static_cast<std::uintptr_t>(mantissa >> offset);
+    words[index] |= part << within;
+    if (within)
+      words[index + 1] |= part >> (width - within);
+  }
+  return fromWords(words, std::signbit(value));
+}
+
 } // namespace rcgmp
 
 extern "C" {
@@ -96,4 +131,12 @@ float rcgmp_mpz_to_f32(void *value) {
   return rcgmp::toFloating<float>(rcgmp::Handle(value));
 }
 float rcgmp_mpz_to_f32_atomic(void *value) { return rcgmp_mpz_to_f32(value); }
+
+// A new integer has no other owner, so its counting needs no atomicity.
+void *rcgmp_mpz_from_f64(double value) {
+  return rcgmp::fromFloating(value).pointer();
+}
+void *rcgmp_mpz_from_f64_atomic(double value) {
+  return rcgmp_mpz_from_f64(value);
+}
 }
