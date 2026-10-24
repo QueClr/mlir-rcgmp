@@ -1,6 +1,7 @@
 #include "RCGMP/Conversion/ConvertRCGMPToLLVM.h"
 #include "RCGMP/Conversion/ConvertRCGMPToSCF.h"
 #include "RCGMP/IR/RCGMPDialect.h"
+#include "RCGMP/Transforms/OptimizeRC.h"
 
 #include <mlir/Conversion/ArithToLLVM/ArithToLLVM.h>
 #include <mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h>
@@ -45,6 +46,7 @@ int main(int argc, char **argv) {
   mlir::registerConvertMathToLLVMInterface(registry);
   mlir::ub::registerConvertUBToLLVMInterface(registry);
   mlir::registerConvertMemRefToLLVMInterface(registry);
+  mlir::registerPass([] { return mlir::rcgmp::createOptimizeRCPass(); });
   mlir::registerPass([] { return mlir::rcgmp::createConvertRCGMPToSCFPass(); });
   mlir::registerPass([] { return mlir::createSCFToControlFlowPass(); });
   mlir::registerPass([] { return mlir::createReconcileUnrealizedCastsPass(); });

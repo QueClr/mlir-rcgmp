@@ -97,6 +97,8 @@ if needed. Use `-DGMP_ROOT=/path/to/gmp` for a custom GMP prefix, or set
 - `lib/Conversion/ConvertRCGMPBridgeToLLVM.cpp`: bridges to LLVM instructions
   and runtime calls.
 - `lib/Conversion/ConvertRCGMPToLLVM.cpp`: type conversion and registration.
+- `lib/Transforms/OptimizeRC.cpp`: reference-count optimization on the public
+  operations.
 - `runtime`: C++ modules implementing the C ABI in `RCGMP/Runtime`, linked as
   `RCGMP::Runtime`.
 - `tests`: IR checks and native tests compiled through the complete lowering.
@@ -204,6 +206,40 @@ receive the reuse flags as a final unsigned `i32`, whose bit i permits reusing
 the storage of the i-th mpz operand, so such an operation has at most 32 mpz
 operands. Entry points of operations that borrow their operands or produce a
 fixed-width integer receive no reuse flags.
+
+## Reference-count optimization
+
+`-rcgmp-optimize-rc` removes `rcgmp.retain` and `rcgmp.release` pairs on the
+same value, as Perceus fuses dups with drops
+([Reinking et al., PLDI 2021](https://doi.org/10.1145/3453483.3454032)). It
+runs on the public operations, before `-convert-rcgmp-to-scf`.
+
+A retain cancels a later release of the same value in its block when every use
+between them still has a reference to spare. When the last of those uses
+consumes the value, it receives the last reference, so the runtime may reuse
+the storage in place:
+
+```mlir
+rcgmp.retain %x : !rcgmp.mpz
+%s = rcgmp.addi %x, %one : !rcgmp.mpz
+rcgmp.release %x : !rcgmp.mpz
+```
+
+becomes `%s = rcgmp.addi %x, %one : !rcgmp.mpz`. A comparison reading `%x`
+after the addition would keep the pair. Each use is summarized by the
+references it needs and the range by which it changes the count. Public
+operations declare consumed operands with a free effect; other operations may
+consume each operand they receive but never add references. `scf.if`,
+`scf.index_switch`, and `rcgmp.match` run one of their regions, and the bodies
+of `scf.for` and `scf.while` must leave the count unchanged. Pairs around other
+operations with regions, around bridge operations, or in different blocks are
+kept.
+
+A retain before `scf.if`, `scf.index_switch`, or `rcgmp.match` moves into each
+of its regions when that lets it cancel a release in one of them. Likewise, a
+release after one moves to the end of each region when that lets it cancel a
+retain there. Every path still runs at most as many reference-counting
+operations as before.
 
 ## Custom allocation
 

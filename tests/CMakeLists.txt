@@ -89,8 +89,9 @@ rcgmp_gtest(rcgmp-gmp-link)
 
 # Compile the complete MLIR -> SCF -> LLVM IR path and exercise its native ABI.
 include(RCGMPLowering)
+# Further arguments are rcgmp-opt passes to run before lowering.
 function(rcgmp_native_test name)
-  rcgmp_lower_mlir(runtime/${name}.mlir object)
+  rcgmp_lower_mlir(runtime/${name}.mlir object ${ARGN})
   add_executable(rcgmp-${name} runtime/${name}.cpp ${object})
   target_compile_definitions(rcgmp-${name} PRIVATE RCGMP_TEST_ALLOCATOR)
   target_link_libraries(rcgmp-${name} PRIVATE RCGMPTestAllocator RCGMPTesting)
@@ -119,6 +120,7 @@ rcgmp_native_test(log2)
 rcgmp_native_test(testbit)
 rcgmp_native_test(gcd)
 rcgmp_native_test(exact-division)
+rcgmp_native_test(optimize-rc -rcgmp-optimize-rc)
 
 # The differential harness compares each feature, compiled from its own MLIR
 # source, with GMP. It also exercises the comparisons in compare.mlir, the
