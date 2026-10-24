@@ -126,6 +126,7 @@ rcgmp_native_test(limb)
 rcgmp_native_test(floating)
 rcgmp_native_test(gcd)
 rcgmp_native_test(exact-division)
+rcgmp_native_test(fused-chains)
 
 # The differential harness compares each feature, compiled from its own MLIR
 # source, with GMP. It also exercises the comparisons in compare.mlir, the
