@@ -205,6 +205,18 @@ the storage of the i-th mpz operand, so such an operation has at most 32 mpz
 operands. Entry points of operations that borrow their operands or produce a
 fixed-width integer receive no reuse flags.
 
+## Decimal conversion
+
+The runtime converts integers to and from decimal text through C entry points
+rather than operations, so that an embedder can write the digits straight
+into its own string storage. `rcgmp_mpz_decimal_size` returns a buffer size
+sufficient for a borrowed integer, `rcgmp_mpz_to_decimal` writes the digits,
+with a leading minus sign for a negative integer, and returns their length,
+and `rcgmp_mpz_from_decimal` parses an optional minus sign followed by one or
+more digits into an owned integer, returning null for any other text. Writing
+allocates nothing; heap integers convert through GMP's subquadratic
+`mpz_get_str` and `mpn_set_str`.
+
 ## Custom allocation
 
 Every runtime allocation and deallocation uses this C ABI, declared in

@@ -153,6 +153,19 @@ int32_t rcgmp_mpz_cmp_atomic(void *lhs, void *rhs);
 int32_t rcgmp_mpz_tstbit(void *value, uintptr_t index);
 int32_t rcgmp_mpz_tstbit_atomic(void *value, uintptr_t index);
 
+// A buffer size sufficient for rcgmp_mpz_to_decimal with the borrowed value:
+// room for its digits, a minus sign, and a terminator written after them.
+size_t rcgmp_mpz_decimal_size(void *value);
+// Writes the decimal representation of the borrowed value to buffer, which
+// holds rcgmp_mpz_decimal_size(value) bytes, and returns its length: a minus
+// sign for a negative value, then digits without leading zeros. A zero byte
+// may follow it. Reference counts are unchanged.
+size_t rcgmp_mpz_to_decimal(void *value, char *buffer);
+// Parses length bytes at text, an optional minus sign followed by one or more
+// decimal digits, and returns an integer owning one reference, or null if the
+// bytes have another form. Leading zeros are permitted.
+void *rcgmp_mpz_from_decimal(const char *text, size_t length, uint32_t atomic);
+
 // Only for a heap value whose final decrement has already completed.
 void rcgmp_mpz_free(void *value, uint32_t atomic);
 

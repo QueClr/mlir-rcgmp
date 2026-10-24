@@ -87,6 +87,11 @@ add_executable(rcgmp-gmp-link runtime/gmp-link.cpp)
 target_link_libraries(rcgmp-gmp-link PRIVATE GMP::GMP)
 rcgmp_gtest(rcgmp-gmp-link)
 
+# Decimal conversion, which the runtime provides without an operation.
+add_executable(rcgmp-decimal runtime/decimal.cpp)
+target_link_libraries(rcgmp-decimal PRIVATE RCGMPTestAllocator RCGMPTesting)
+rcgmp_gtest(rcgmp-decimal)
+
 # Compile the complete MLIR -> SCF -> LLVM IR path and exercise its native ABI.
 include(RCGMPLowering)
 function(rcgmp_native_test name)
