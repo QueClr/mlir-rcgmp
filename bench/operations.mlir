@@ -467,3 +467,29 @@ func.func @euclid(%x: !rcgmp.mpz, %y: !rcgmp.mpz) -> !rcgmp.mpz {
   rcgmp.release %r#1 : !rcgmp.mpz
   return %r#0 : !rcgmp.mpz
 }
+// Exact division, next to plain division of the same multiples, by a variable
+// divisor and by constants.
+func.func @divsi_exact(%x: !rcgmp.mpz, %y: !rcgmp.mpz) -> !rcgmp.mpz {
+  %r = rcgmp.divsi %x, %y exact : !rcgmp.mpz
+  return %r : !rcgmp.mpz
+}
+func.func @divsi_exact_by_12(%x: !rcgmp.mpz) -> !rcgmp.mpz {
+  %c = rcgmp.constant 12 : !rcgmp.mpz
+  %r = rcgmp.divsi %x, %c exact : !rcgmp.mpz
+  return %r : !rcgmp.mpz
+}
+func.func @divsi_by_12(%x: !rcgmp.mpz) -> !rcgmp.mpz {
+  %c = rcgmp.constant 12 : !rcgmp.mpz
+  %r = rcgmp.divsi %x, %c : !rcgmp.mpz
+  return %r : !rcgmp.mpz
+}
+func.func @divsi_exact_by_8(%x: !rcgmp.mpz) -> !rcgmp.mpz {
+  %c = rcgmp.constant 8 : !rcgmp.mpz
+  %r = rcgmp.divsi %x, %c exact : !rcgmp.mpz
+  return %r : !rcgmp.mpz
+}
+func.func @divsi_by_8(%x: !rcgmp.mpz) -> !rcgmp.mpz {
+  %c = rcgmp.constant 8 : !rcgmp.mpz
+  %r = rcgmp.divsi %x, %c : !rcgmp.mpz
+  return %r : !rcgmp.mpz
+}

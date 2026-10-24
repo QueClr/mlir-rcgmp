@@ -426,6 +426,12 @@ static OpFoldResult foldDivision(Op op, ArrayRef<Attribute> operands) {
   auto results = divideConstants(operands, rounding, op.getDivZero());
   if (!results)
     return {};
+  // An exact quotient of a lhs that is not a multiple of rhs is undefined. It
+  // is not folded to an arbitrary value, so the program computes what it
+  // would without folding.
+  if constexpr (quotient)
+    if (op.getExact() && !results->second.isZero())
+      return {};
   return foldedMpz(op->getContext(),
                    quotient ? results->first : results->second);
 }
@@ -596,13 +602,28 @@ LogicalResult DivSIOp::canonicalize(DivSIOp op, PatternRewriter &rewriter) {
   return canonicalizeLeanQuotient(op, rewriter);
 }
 
+// An exact quotient does not depend on its rounding, so a floored or Euclidean
+// one becomes the truncated one, and exact quotients have a single form.
+template <typename Op>
+static LogicalResult canonicalizeRoundedQuotient(Op op,
+                                                 PatternRewriter &rewriter) {
+  if (succeeded(canonicalizeLeanQuotient(op, rewriter)))
+    return success();
+  if (!op.getExact())
+    return failure();
+  rewriter.replaceOpWithNewOp<DivSIOp>(op, op.getType(), op.getLhs(),
+                                       op.getRhs(), op.getDivZero(),
+                                       /*exact=*/true);
+  return success();
+}
+
 LogicalResult FloorDivSIOp::canonicalize(FloorDivSIOp op,
                                          PatternRewriter &rewriter) {
-  return canonicalizeLeanQuotient(op, rewriter);
+  return canonicalizeRoundedQuotient(op, rewriter);
 }
 
 LogicalResult EDivSIOp::canonicalize(EDivSIOp op, PatternRewriter &rewriter) {
-  return canonicalizeLeanQuotient(op, rewriter);
+  return canonicalizeRoundedQuotient(op, rewriter);
 }
 
 LogicalResult ConstantOp::verify() {

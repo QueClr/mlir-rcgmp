@@ -287,11 +287,37 @@ class RCGMP_DivisionOp<string name, string semantics>
   let hasFolder = 1;
 }
 
-def RCGMP_DivSIOp : RCGMP_DivisionOp<"divsi", [{
+// Only quotients take `exact`: the remainder it asserts is zero, and the pairs
+// would compute nothing more than a quotient.
+defvar RCGMP_ExactDescription = [{
+    With `exact`, lhs must be a multiple of rhs, and otherwise the result is
+    undefined. The quotient then does not depend on how it is rounded. Zero is
+    the only multiple of zero: with `lean`, the result of a zero divisor is
+    undefined unless lhs is zero, whose quotient is zero, as for Lean's
+    `Nat.divExact` and `Int.divExact`. With `trap`, a zero divisor still
+    terminates the program.
+
+    ```mlir
+    %q = rcgmp.divsi %x, %y exact divzero<lean> : !rcgmp.mpz
+    ```
+  }];
+
+class RCGMP_QuotientOp<string name, string semantics>
+    : RCGMP_DivisionOp<name, semantics> {
+  let arguments = !con(RCGMP_DivisionArguments, (ins UnitAttr:$exact));
+  let assemblyFormat = [{
+    $lhs `,` $rhs (`exact` $exact^)? (`divzero` `` $divZero^)? attr-dict `:`
+    type($result)
+  }];
+  let description = RCGMP_DivisionDescription # semantics #
+                    RCGMP_DivZeroDescription # RCGMP_ExactDescription;
+  let hasCanonicalizeMethod = 1;
+}
+
+def RCGMP_DivSIOp : RCGMP_QuotientOp<"divsi", [{
     The quotient is rounded toward zero.
   }]> {
   let summary = "Consume two integer references and produce their truncated quotient";
-  let hasCanonicalizeMethod = 1;
 }
 
 def RCGMP_RemSIOp : RCGMP_DivisionOp<"remsi", [{
@@ -300,11 +326,10 @@ def RCGMP_RemSIOp : RCGMP_DivisionOp<"remsi", [{
   let summary = "Consume two integer references and produce their truncated remainder";
 }
 
-def RCGMP_FloorDivSIOp : RCGMP_DivisionOp<"floordivsi", [{
+def RCGMP_FloorDivSIOp : RCGMP_QuotientOp<"floordivsi", [{
     The quotient is rounded toward negative infinity.
   }]> {
   let summary = "Consume two integer references and produce their floored quotient";
-  let hasCanonicalizeMethod = 1;
 }
 
 def RCGMP_FloorModSIOp : RCGMP_DivisionOp<"floormodsi", [{
@@ -314,13 +339,12 @@ def RCGMP_FloorModSIOp : RCGMP_DivisionOp<"floormodsi", [{
   let summary = "Consume two integer references and produce their floored remainder";
 }
 
-def RCGMP_EDivSIOp : RCGMP_DivisionOp<"edivsi", [{
+def RCGMP_EDivSIOp : RCGMP_QuotientOp<"edivsi", [{
     The quotient is rounded toward negative infinity for a positive rhs and
     toward positive infinity for a negative rhs, so that the remainder is
     nonnegative.
   }]> {
   let summary = "Consume two integer references and produce their Euclidean quotient";
-  let hasCanonicalizeMethod = 1;
 }
 
 def RCGMP_EModSIOp : RCGMP_DivisionOp<"emodsi", [{

@@ -106,6 +106,13 @@ void *rcgmp_mpz_ediv_q_lean_atomic(void *lhs, void *rhs, uint32_t reuse);
 void *rcgmp_mpz_ediv_r_lean(void *lhs, void *rhs, uint32_t reuse);
 void *rcgmp_mpz_ediv_r_lean_atomic(void *lhs, void *rhs, uint32_t reuse);
 
+// Divide lhs by rhs, with the same ownership and reuse contract. lhs must be a
+// multiple of rhs, so the quotient is the same for every rounding; otherwise
+// the result is unspecified. A zero divisor terminates the program: the only
+// lean exact division by zero divides zero, which compiled code does inline.
+void *rcgmp_mpz_tdiv_q_exact(void *lhs, void *rhs, uint32_t reuse);
+void *rcgmp_mpz_tdiv_q_exact_atomic(void *lhs, void *rhs, uint32_t reuse);
+
 // Both results of a division, each owning one reference.
 typedef struct {
   void *quotient;

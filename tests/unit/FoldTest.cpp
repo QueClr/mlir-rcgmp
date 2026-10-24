@@ -218,6 +218,41 @@ void checkDivisions(const Integer &x, const Integer &y) {
   }
 }
 
+// Exact quotients in each mode fold when x is a multiple of y, and are
+// otherwise undefined and left unfolded, as are zero divisors except in lean
+// mode, where zero by zero folds to zero.
+void checkExactQuotients(const Integer &x, const Integer &y) {
+  using mlir::rcgmp::DivZero;
+  Integer quotient;
+  bool multiple = mpz_divisible_p(x, y);
+  if (multiple && y.sign())
+    mpz_divexact(quotient, x, y);
+  for (DivZero mode : {DivZero::trap, DivZero::undefined, DivZero::lean}) {
+    Folder folder;
+    bool folds = multiple && (y.sign() || mode == DivZero::lean);
+    auto expect = [&](Value value, const char *name) {
+      std::string operation = std::string(name) + " exact " +
+                              mlir::rcgmp::stringifyDivZero(mode).str() + " " +
+                              x.hex() + ", " + y.hex();
+      std::optional<Integer> folded = mpzValue(value);
+      if (folds)
+        EXPECT_EQ(folded, quotient) << operation;
+      else
+        EXPECT_FALSE(folded) << operation << " was folded";
+    };
+    Type type = folder.mpzType();
+    expect(folder.fold<mlir::rcgmp::DivSIOp>(type, folder.mpz(x), folder.mpz(y),
+                                             mode, true)[0],
+           "divsi");
+    expect(folder.fold<mlir::rcgmp::FloorDivSIOp>(type, folder.mpz(x),
+                                                  folder.mpz(y), mode, true)[0],
+           "floordivsi");
+    expect(folder.fold<mlir::rcgmp::EDivSIOp>(type, folder.mpz(x),
+                                              folder.mpz(y), mode, true)[0],
+           "edivsi");
+  }
+}
+
 void checkComparisons(const Integer &x, const Integer &y) {
   Folder folder;
   int order = mpz_cmp(x, y);
@@ -314,6 +349,17 @@ void GcdFoldsMatchGmp(const std::pair<Integer, Integer> &operands) {
   checkBinary<mlir::rcgmp::GcdIOp>(operands.first, operands.second, mpz_gcd);
 }
 FUZZ_TEST(Fold, GcdFoldsMatchGmp).WithDomains(::rcgmp::test::AnyGcdOperands());
+
+// Multiples x = q y, of which arbitrary operands are rarely any, and the same
+// pairs with x off by one, which are not multiples unless y is one.
+void ExactFoldsMatchGmp(const std::pair<Integer, Integer> &operands) {
+  auto &[q, y] = operands;
+  Integer x;
+  mpz_mul(x, q, y);
+  checkExactQuotients(x, y);
+  checkExactQuotients(x + 1, y);
+}
+FUZZ_TEST(Fold, ExactFoldsMatchGmp).WithDomains(::rcgmp::test::AnyOperands());
 
 // Operands past 4096 bits stay computed at run time, even when the result is
 // small.

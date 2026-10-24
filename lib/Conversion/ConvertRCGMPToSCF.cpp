@@ -728,9 +728,21 @@ struct DivisionLowering : FastPathLowering<Derived> {
     return cast<typename Derived::Op>(op).getDivZero();
   }
 
+  // Whether the operation is an exact quotient, which does not depend on its
+  // rounding.
+  static bool isExact(Operation *op) {
+    if constexpr (quotient && !remainder)
+      return cast<typename Derived::Op>(op).getExact();
+    return false;
+  }
+
   // Undefined division by zero calls the trapping functions, which may still
-  // terminate on it.
+  // terminate on it. So do exact lean divisions, as their only defined
+  // division by zero divides zero, which the fast path does.
   static StringRef getRuntimeSymbol(Operation *op, bool atomic) {
+    if (isExact(op))
+      return atomic ? "rcgmp_mpz_tdiv_q_exact_atomic"
+                    : "rcgmp_mpz_tdiv_q_exact";
     return getDivZero(op) == DivZero::lean ? Derived::getLeanRuntimeName(atomic)
                                            : Derived::getRuntimeName(atomic);
   }
@@ -738,6 +750,7 @@ struct DivisionLowering : FastPathLowering<Derived> {
   static FastPath buildFastPath(PatternRewriter &rewriter, Location loc,
                                 Operation *op, ValueRange operands) {
     DivZero divZero = getDivZero(op);
+    bool exact = isExact(op);
     Value lhs = operands[0], rhs = operands[1];
     auto type = cast<IntegerType>(lhs.getType());
     auto constant = [&](int64_t value) -> Value {
@@ -745,9 +758,11 @@ struct DivisionLowering : FastPathLowering<Derived> {
                                           type.getWidth());
     };
     Value two = constant(2), zero = constant(0);
+    // An exact quotient is the truncated one, whose division LLVM reduces to
+    // shifts and a multiplication by the inverse of a constant divisor.
     // Euclidean division by a positive divisor is floored division, which
     // LLVM reduces to shifts and masks for a power of two.
-    Rounding mode = rounding;
+    Rounding mode = exact ? Rounding::truncate : rounding;
     if (auto divisor = op->getOperand(1).getDefiningOp<ConstantOp>();
         mode == Rounding::euclidean && divisor &&
         divisor.getValue().isStrictlyPositive() &&
@@ -773,7 +788,9 @@ struct DivisionLowering : FastPathLowering<Derived> {
     // A lean division replaces a zero divisor of the word division alone by
     // the signed word minimum. Its magnitude exceeds those of untagged
     // immediates, so the truncated quotient is zero and the remainder x, as
-    // lean requires. The rounding adjustments still see the zero divisor.
+    // lean requires. The rounding adjustments still see the zero divisor. An
+    // exact lean division by zero is defined only for x zero, which is a
+    // multiple of the minimum.
     auto wordDivisor = [&](Value value) -> Value {
       if (divZero != DivZero::lean)
         return value;
@@ -811,6 +828,9 @@ struct DivisionLowering : FastPathLowering<Derived> {
       r = arith::AddIOp::create(rewriter, loc,
                                 arith::XOrIOp::create(rewriter, loc, r, xSign),
                                 arith::AndIOp::create(rewriter, loc, b, xSign));
+    } else if (exact) {
+      q = arith::DivSIOp::create(rewriter, loc, x, wordDivisor(y),
+                                 /*isExact=*/true);
     } else {
       Value d = wordDivisor(y);
       q = arith::DivSIOp::create(rewriter, loc, x, d);

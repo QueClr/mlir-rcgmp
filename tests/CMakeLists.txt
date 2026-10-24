@@ -107,6 +107,7 @@ rcgmp_native_test(power)
 rcgmp_native_test(division)
 rcgmp_native_test(log2)
 rcgmp_native_test(gcd)
+rcgmp_native_test(exact-division)
 
 # The differential harness compares each feature, compiled from its own MLIR
 # source, with GMP. It also exercises the comparisons in compare.mlir and the
@@ -115,6 +116,7 @@ add_executable(rcgmp-differential
   runtime/differential/binary.cpp runtime/differential/chain.cpp
   runtime/differential/compare.cpp runtime/differential/construction.cpp
   runtime/differential/counting.cpp runtime/differential/division.cpp
+  runtime/differential/exact.cpp
   runtime/differential/gcd.cpp runtime/differential/log2.cpp
   runtime/differential/match.cpp runtime/differential/power.cpp
   runtime/differential/shift.cpp runtime/differential/truncation.cpp
@@ -123,7 +125,7 @@ add_executable(rcgmp-differential
   ${CMAKE_CURRENT_BINARY_DIR}/runtime/log2.o)
 target_sources(rcgmp-differential PRIVATE FILE_SET CXX_MODULES FILES
   runtime/differential/Differential.cppm)
-foreach(name binary constant counting division extend match power shift
+foreach(name binary constant counting division exact extend match power shift
     truncation unary)
   rcgmp_lower_mlir(runtime/differential/${name}.mlir object)
   target_sources(rcgmp-differential PRIVATE ${object})

@@ -2,6 +2,8 @@ module;
 #include "RCGMP/Runtime/Mpz.h"
 #include <gmp.h>
 
+#include <algorithm>
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -210,6 +212,148 @@ Division divideLean(Handle lhs, Handle rhs, Reuse reuse) {
   return result;
 }
 
+// The inverse of an odd limb modulo 2^GMP_NUMB_BITS. (3 odd) xor 2 is correct
+// in its five low bits, and each Newton step doubles the correct bits.
+constexpr Limb inverse(Limb odd) {
+  // The step x (2 - odd x) is written x (1 + e) with the error e = 1 - odd x,
+  // which the step squares, so that the products of a step are independent.
+  Limb inverse = (3 * odd) ^ 2, error = 1 - odd * inverse;
+  for (unsigned bits = 5; bits < GMP_NUMB_BITS; bits *= 2) {
+    inverse *= 1 + error;
+    error *= error;
+  }
+  return inverse;
+}
+
+// Replaces {qp, qn} by its quotient by the odd {dp, dn} modulo 2^(qn W), from
+// the low end: each step chooses the quotient limb that clears the lowest
+// remaining limb, and subtracts that multiple of the divisor from the limbs
+// above, which matter up to the qn-th limb only. When {qp, qn} is a multiple
+// of {dp, dn} with a quotient of qn limbs, this is that quotient.
+void divideFromLowEnd(Limb *qp, std::size_t qn, const Limb *dp,
+                      std::size_t dn) {
+  Limb dinv = inverse(dp[0]);
+  for (std::size_t i = 0; i + 1 < qn; ++i) {
+    Limb q = qp[i] * dinv;
+    std::size_t count = std::min(dn, qn - i);
+    Limb borrow = mpn_submul_1(qp + i, dp, count, q);
+    if (i + count < qn)
+      mpn_sub_1(qp + i + count, qp + i + count, qn - i - count, borrow);
+    qp[i] = q;
+  }
+  // The last quotient limb clears no limb above.
+  qp[qn - 1] *= dinv;
+}
+
+// Division from the low end of more limb products than this, of operands of
+// about 180 limbs, is slower than mpn_tdiv_qr.
+constexpr std::size_t maxLowEndProducts = 1 << 15;
+
+// The quotient of lhs by rhs, of which lhs must be a multiple; otherwise the
+// result is some integer no longer than lhs. A zero divisor terminates the
+// program. As in mpz_divexact, the zero limbs ending the divisor, which also
+// end the dividend, are dropped, and a divisor of several limbs is made odd by
+// shifting both operands right by its trailing zero bits. Only the lowest
+// limbs of the operands then determine the quotient, which is computed from
+// the low end, in the storage of a unique dividend if there is one, unless the
+// operands are long enough for mpn_tdiv_qr to be faster.
+export template <Counting counting>
+Handle divideExact(Handle lhs, Handle rhs, Reuse reuse) {
+  if (lhs.isImmediate() && rhs.isImmediate()) {
+    std::intptr_t divisor = rhs.value();
+    if (!divisor)
+      std::abort();
+    // Only the quotient of the immediate minimum by -1 leaves the immediate
+    // range.
+    return fromInteger(lhs.value() / divisor);
+  }
+  Magnitude n(lhs), d(rhs);
+  if (!d.count())
+    std::abort();
+  std::size_t nn = n.count(), dn = d.count();
+  // Only zero is a multiple shorter than the divisor.
+  if (nn < dn)
+    return consume<counting>(lhs, rhs, Handle::immediate(0));
+  bool negative = n.negative != d.negative;
+  const Limb *np = n.limbs.data(), *dp = d.limbs.data();
+  std::size_t zeros = 0;
+  while (!dp[zeros])
+    ++zeros;
+  np += zeros;
+  nn -= zeros;
+  dp += zeros;
+  dn -= zeros;
+  // The quotient is less than 2^(qn W). Dividing from the low end takes about
+  // qn min(qn, dn) limb products, beyond which the subquadratic division of
+  // mpn_tdiv_qr is faster, although it also computes a remainder. Its quotient
+  // may not overlap the dividend.
+  std::size_t qn = nn - dn + 1, oddCount = std::min(dn, qn);
+  bool fromLowEnd = dn == 1 || qn * oddCount <= maxLowEndProducts;
+  bool inPlace = reuse.lhs && fromLowEnd;
+  // A quotient of a single limb, which is often immediate, needs no storage
+  // until it is known.
+  Limb single;
+  Mpz *quotient = inPlace  ? &lhs.heap()
+                  : qn > 1 ? &allocateResult(qn)
+                           : nullptr;
+  Limb *qp = quotient ? quotient->limbs().data() : &single;
+  if (!fromLowEnd) {
+    Mpz &remainder = allocate(dn);
+    mpn_tdiv_qr(qp, remainder.limbs().data(), 0, np, nn, dp, dn);
+    deallocate<counting>(remainder);
+  } else if (nn == 1) {
+    qp[0] = np[0] / dp[0];
+  } else if (dn == 1) {
+    // mpn_divexact_1 accepts an even divisor, but not a quotient that
+    // partially overlaps the dividend, as in a unique dividend with zero limbs
+    // dropped.
+    if (qp != np && inPlace) {
+      std::copy_n(np, nn, qp);
+      np = qp;
+    }
+    mpn_divexact_1(qp, np, nn, dp[0]);
+  } else {
+    // The quotient's limbs come from the low qn limbs of the dividend shifted
+    // right, whose highest takes bits from the limb above. A unique dividend
+    // moves toward its low end, which mpn_rshift permits, and the limb above
+    // lies beyond the limbs it writes.
+    unsigned shift = std::countr_zero(dp[0]);
+    if (shift) {
+      mpn_rshift(qp, np, qn, shift);
+      qp[qn - 1] |= np[qn] << (GMP_NUMB_BITS - shift);
+    } else if (qp != np) {
+      std::copy_n(np, qn, qp);
+    }
+    // Likewise only the low qn limbs of the divisor matter.
+    const Limb *odd = dp;
+    Limb stack[16];
+    Mpz *spill = nullptr;
+    if (shift) {
+      spill = oddCount > std::size(stack) ? &allocate(oddCount) : nullptr;
+      Limb *op = spill ? spill->limbs().data() : stack;
+      mpn_rshift(op, dp, oddCount, shift);
+      if (oddCount < dn)
+        op[oddCount - 1] |= dp[oddCount] << (GMP_NUMB_BITS - shift);
+      odd = op;
+    }
+    divideFromLowEnd(qp, qn, odd, oddCount);
+    if (spill)
+      deallocate<counting>(*spill);
+  }
+  Handle result = Handle::immediate(0);
+  if (quotient) {
+    quotient->setMagnitude(qn, negative);
+    result = normalize<counting>(*quotient);
+  } else {
+    result = fromWords(std::span(&single, 1), negative);
+  }
+  // Release each operand whose storage holds no result, after all reads.
+  if (!inPlace)
+    release<counting>(lhs);
+  release<counting>(rhs);
+  return result;
+}
+
 // Adapts a division with one result to the runtime ABI.
 template <auto divide, Handle Division::*result>
 void *divisionEntryPoint(void *lhs, void *rhs, std::uint32_t reuse) {
@@ -282,4 +426,14 @@ RCGMP_DIVISION_PAIR(tdiv_qr_lean, divideLean, rcgmp::Rounding::truncate)
 RCGMP_DIVISION_PAIR(fdiv_qr_lean, divideLean, rcgmp::Rounding::floor)
 RCGMP_DIVISION_PAIR(ediv_qr_lean, divideLean, rcgmp::Rounding::euclidean)
 #undef RCGMP_DIVISION_PAIR
+
+void *rcgmp_mpz_tdiv_q_exact(void *lhs, void *rhs, std::uint32_t reuse) {
+  return rcgmp::binaryEntryPoint<
+      rcgmp::divideExact<rcgmp::Counting::nonatomic>>(lhs, rhs, reuse);
+}
+
+void *rcgmp_mpz_tdiv_q_exact_atomic(void *lhs, void *rhs, std::uint32_t reuse) {
+  return rcgmp::binaryEntryPoint<rcgmp::divideExact<rcgmp::Counting::atomic>>(
+      lhs, rhs, reuse);
+}
 }

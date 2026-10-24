@@ -10,6 +10,7 @@
 
 #include <array>
 #include <cstdint>
+#include <deque>
 #include <string>
 #include <string_view>
 #include <tuple>
@@ -71,6 +72,11 @@ std::int64_t log2i(void *);
 std::int64_t shifted_trunci_log2(void *);
 void *gcdi(void *, void *);
 void *euclid(void *, void *);
+void *divsi_exact(void *, void *);
+void *divsi_exact_by_12(void *);
+void *divsi_by_12(void *);
+void *divsi_exact_by_8(void *);
+void *divsi_by_8(void *);
 }
 
 namespace {
@@ -999,10 +1005,104 @@ void registerGcd() {
                                });
 }
 
+// Sets value to count limbs of a fixed sequence, the highest with its top bit
+// set.
+void setLimbs(mpz_ptr value, std::size_t count, std::uint64_t seed) {
+  mpz_set_ui(value, 0);
+  for (std::size_t i = 0; i < count; ++i) {
+    seed = seed * 6364136223846793005u + 1442695040888963407u;
+    mpz_mul_2exp(value, value, 64);
+    mpz_add_ui(value, value, i ? seed : seed | 1ul << 63);
+  }
+}
+
+// Exact division of multiples, compiled with and without exact and by GMP's
+// mpz_divexact and mpz_tdiv_q, with nonatomic counting only. Heap divisors
+// are as long as their quotients, or longer, as in the least common multiple
+// of operands with a large common factor.
+void registerExactDivisions() {
+  struct ExactCase {
+    std::string label;
+    mpz_srcptr x, y;
+  };
+  std::vector<ExactCase> cases;
+  static std::deque<Integer> operands;
+  auto multiple = [&](std::string label, mpz_srcptr quotient,
+                      mpz_srcptr divisor) {
+    Integer &x = operands.emplace_back(0), &y = operands.emplace_back(0);
+    mpz_mul(x.value, quotient, divisor);
+    mpz_set(y.value, divisor);
+    cases.push_back({std::move(label), x.value, y.value});
+  };
+  Integer smallQ(smallLhs), smallY(-smallRhs), heapQ(lhsWords);
+  multiple("/multiples, immediates", smallQ.value, smallY.value);
+  multiple("/multiples, shared heap, immediate", heapQ.value, smallY.value);
+  for (auto [quotientLimbs, divisorLimbs] :
+       {std::pair{2u, 2u}, {4u, 4u}, {16u, 16u}, {2u, 16u}}) {
+    Integer quotient(0), divisor(0);
+    setLimbs(quotient.value, quotientLimbs, 1);
+    setLimbs(divisor.value, divisorLimbs, 2);
+    multiple("/multiples, shared heaps, " +
+                 std::to_string(quotientLimbs + divisorLimbs) + " and " +
+                 std::to_string(divisorLimbs) + " limbs",
+             quotient.value, divisor.value);
+  }
+  for (const ExactCase &test : cases) {
+    for (auto [name, op] :
+         {std::pair{"divsi exact", divsi_exact}, {"divsi", divsi}}) {
+      Counted counted = countings[0];
+      counted.binary = op;
+      benchmark::RegisterBenchmark(
+          name + test.label, [=](benchmark::State &state) {
+            binaryShared(state, counted, fromGmp(test.x), fromGmp(test.y));
+          });
+    }
+    for (auto [name, op] :
+         {std::pair{"gmp divexact", mpz_divexact}, {"gmp tdiv_q", mpz_tdiv_q}})
+      benchmark::RegisterBenchmark(name + test.label, gmpBinary, op, test.x,
+                                   test.y);
+  }
+  // Constant divisors, of which LLVM divides exact multiples by a shift and a
+  // multiplication.
+  static Integer smallMultiple(smallLhs * 24);
+  for (auto [name, op] :
+       {std::pair{"divsi exact/immediate by 12", divsi_exact_by_12},
+        {"divsi/immediate by 12", divsi_by_12},
+        {"divsi exact/immediate by 8", divsi_exact_by_8},
+        {"divsi/immediate by 8", divsi_by_8}})
+    benchmark::RegisterBenchmark(name, [=](benchmark::State &state) {
+      for (auto _ : state) {
+        void *x = immediate(smallLhs * 24);
+        benchmark::DoNotOptimize(x);
+        benchmark::DoNotOptimize(op(x));
+      }
+    });
+  benchmark::RegisterBenchmark(
+      "gmp divexact_ui/immediate by 12", [](benchmark::State &state) {
+        for (auto _ : state) {
+          mpz_t result;
+          mpz_init(result);
+          mpz_divexact_ui(result, smallMultiple.value, 12);
+          benchmark::DoNotOptimize(result);
+          mpz_clear(result);
+        }
+      });
+  benchmark::RegisterBenchmark(
+      "gmp tdiv_q_ui/immediate by 12", [](benchmark::State &state) {
+        for (auto _ : state) {
+          mpz_t result;
+          mpz_init(result);
+          mpz_tdiv_q_ui(result, smallMultiple.value, 12);
+          benchmark::DoNotOptimize(result);
+          mpz_clear(result);
+        }
+      });
+}
+
 [[maybe_unused]] const int registered =
     (registerBinaries(), registerMonus(), registerUnaries(), registerShifts(),
      registerPowers(), registerDivisions(), registerEuclidean(), registerLean(),
      registerTruncations(), registerLogarithms(), registerOthers(),
-     registerGcd(), 0);
+     registerGcd(), registerExactDivisions(), 0);
 
 } // namespace
