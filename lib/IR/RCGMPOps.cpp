@@ -353,6 +353,41 @@ static LogicalResult remainderByPowerOfTwo(Op op, PatternRewriter &rewriter) {
   return success();
 }
 
+// A remainder by plus or minus 2^k is zero exactly when the low k bits are,
+// whatever its rounding. One only compared with zero, or released, is
+// therefore computed by rcgmp.floormod2expi without division, as the test
+// `x % 2 == 0` needs.
+template <typename Op>
+static LogicalResult zeroTestedRemainder(Op op, PatternRewriter &rewriter) {
+  auto divisor = op.getRhs().template getDefiningOp<ConstantOp>();
+  if (!divisor)
+    return failure();
+  APInt value = divisor.getValue();
+  APInt magnitude = value.sext(value.getBitWidth() + 1).abs();
+  if (!magnitude.isPowerOf2())
+    return failure();
+  Value remainder = op.getResult();
+  bool onlyZeroTests = llvm::all_of(remainder.getUsers(), [&](Operation *user) {
+    if (isa<ReleaseOp>(user))
+      return true;
+    auto compare = dyn_cast<CmpIOp>(user);
+    if (!compare || (compare.getPredicate() != CmpIPredicate::eq &&
+                     compare.getPredicate() != CmpIPredicate::ne))
+      return false;
+    Value other =
+        compare.getLhs() == remainder ? compare.getRhs() : compare.getLhs();
+    auto zero = other.getDefiningOp<ConstantOp>();
+    return zero && zero.getValue().isZero();
+  });
+  if (!onlyZeroTests)
+    return failure();
+  auto amount = arith::ConstantIntOp::create(rewriter, op.getLoc(),
+                                             magnitude.exactLogBase2(), 64);
+  rewriter.replaceOpWithNewOp<FloorMod2ExpIOp>(op, op.getType(), op.getLhs(),
+                                               amount);
+  return success();
+}
+
 void EModSIOp::getCanonicalizationPatterns(RewritePatternSet &patterns,
                                            MLIRContext *) {
   patterns.add(remainderByPowerOfTwo<EModSIOp>);
@@ -361,6 +396,12 @@ void EModSIOp::getCanonicalizationPatterns(RewritePatternSet &patterns,
 void FloorModSIOp::getCanonicalizationPatterns(RewritePatternSet &patterns,
                                                MLIRContext *) {
   patterns.add(remainderByPowerOfTwo<FloorModSIOp>);
+  patterns.add(zeroTestedRemainder<FloorModSIOp>);
+}
+
+void RemSIOp::getCanonicalizationPatterns(RewritePatternSet &patterns,
+                                          MLIRContext *) {
+  patterns.add(zeroTestedRemainder<RemSIOp>);
 }
 
 // Masking with 2^k - 1 keeps the low k bits, which rcgmp.floormod2expi

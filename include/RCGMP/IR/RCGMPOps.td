@@ -342,6 +342,7 @@ def RCGMP_RemSIOp : RCGMP_DivisionOp<"remsi", [{
     The remainder of the quotient rounded toward zero has the sign of lhs.
   }]> {
   let summary = "Consume two integer references and produce their truncated remainder";
+  let hasCanonicalizer = 1;
 }
 
 def RCGMP_FloorDivSIOp : RCGMP_QuotientOp<"floordivsi", [{
