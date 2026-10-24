@@ -12,8 +12,12 @@
 #include <mlir/Dialect/SCF/IR/SCF.h>
 #include <mlir/Dialect/UB/IR/UBOps.h>
 #include <mlir/IR/BuiltinOps.h>
+#include <mlir/IR/IRMapping.h>
 #include <mlir/IR/Matchers.h>
 #include <mlir/Transforms/DialectConversion.h>
+
+#include <llvm/ADT/SetVector.h>
+#include <llvm/ADT/TypeSwitch.h>
 
 #include <bit>
 #include <cmath>
@@ -1806,6 +1810,180 @@ private:
   }
 };
 
+// How a fusible operation builds its fast path, from the operation's lowering.
+struct Fusible {
+  FastPath (*buildFastPath)(PatternRewriter &, Location, Operation *,
+                            ValueRange);
+  Value (*buildRuntimeOperand)(PatternRewriter &, Location, Value, IntegerType);
+  bool consumesOperands;
+};
+
+template <typename Lowering> Fusible fusibleAs() {
+  return {&Lowering::buildFastPath, &Lowering::buildRuntimeOperand,
+          Lowering::consumesOperands};
+}
+
+// Operations with a single result whose fast path needs no memory access, so
+// that it may run on the bits of another fast path's result.
+std::optional<Fusible> getFusible(Operation *op) {
+  if (op->getNumResults() != 1)
+    return std::nullopt;
+  return TypeSwitch<Operation *, std::optional<Fusible>>(op)
+      .Case([](AddIOp) { return fusibleAs<AddILowering>(); })
+      .Case([](SubIOp) { return fusibleAs<SubILowering>(); })
+      .Case([](MonusIOp) { return fusibleAs<MonusILowering>(); })
+      .Case([](MulIOp) { return fusibleAs<MulILowering>(); })
+      .Case([](AndIOp) { return fusibleAs<AndILowering>(); })
+      .Case([](XOrIOp) { return fusibleAs<XOrILowering>(); })
+      .Case([](OrIOp) { return fusibleAs<OrILowering>(); })
+      .Case([](NotIOp) { return fusibleAs<NotILowering>(); })
+      .Case([](NegIOp) { return fusibleAs<NegILowering>(); })
+      .Case([](AbsIOp) { return fusibleAs<AbsILowering>(); })
+      .Case([](ShLIOp) { return fusibleAs<ShLILowering>(); })
+      .Case([](ShRSIOp) { return fusibleAs<ShRSILowering>(); })
+      .Case([](FloorMod2ExpIOp) { return fusibleAs<FloorMod2ExpILowering>(); })
+      .Case([](DivSIOp) { return fusibleAs<DivSILowering>(); })
+      .Case([](RemSIOp) { return fusibleAs<RemSILowering>(); })
+      .Case([](FloorDivSIOp) { return fusibleAs<FloorDivSILowering>(); })
+      .Case([](FloorModSIOp) { return fusibleAs<FloorModSILowering>(); })
+      .Case([](EDivSIOp) { return fusibleAs<EDivSILowering>(); })
+      .Case([](EModSIOp) { return fusibleAs<EModSILowering>(); })
+      .Case([](CmpIOp) { return fusibleAs<CmpILowering>(); })
+      .Default([](Operation *) { return std::nullopt; });
+}
+
+// Whether value, an operand of user, comes from an operation that joins the
+// chain of user: one in the same block whose integer result user consumes,
+// and nothing else uses, or user borrows, and only later releases use.
+Operation *fusedProducer(Value value, Operation *user, bool userConsumes) {
+  Operation *producer = value.getDefiningOp();
+  if (!producer || producer->getBlock() != user->getBlock() ||
+      !isa<MpzType>(value.getType()) || !getFusible(producer))
+    return nullptr;
+  if (userConsumes)
+    return value.hasOneUse() ? producer : nullptr;
+  bool onlyReleased = llvm::all_of(value.getUsers(), [&](Operation *other) {
+    return other == user ||
+           (isa<ReleaseOp>(other) && user->isBeforeInBlock(other));
+  });
+  return onlyReleased ? producer : nullptr;
+}
+
+struct FusionRewriter : PatternRewriter {
+  explicit FusionRewriter(MLIRContext *context) : PatternRewriter(context) {}
+};
+
+// Lowers the chain ending at root as one fast path: the fast paths of its
+// operations, applied to the bits of the results before them, and valid when
+// all of them are. Taken one by one, every result would join its heap result
+// in a phi that the next operation tests again. The slow path performs the
+// original operations, which lower one by one. A result the root borrows is
+// immediate on the fast path, so its later releases move to the slow path,
+// right after the root, which no other use separates them from.
+void fuseChain(Operation *root, PatternRewriter &rewriter,
+               DenseSet<Operation *> &erased) {
+  llvm::SetVector<Operation *> chain;
+  SmallVector<std::pair<Operation *, bool>> worklist{
+      {root, getFusible(root)->consumesOperands}};
+  while (!worklist.empty()) {
+    auto [user, consumes] = worklist.pop_back_val();
+    for (Value operand : user->getOperands())
+      if (Operation *producer = fusedProducer(operand, user, consumes))
+        if (chain.insert(producer))
+          worklist.push_back(
+              {producer, getFusible(producer)->consumesOperands});
+  }
+  if (chain.empty())
+    return;
+  SmallVector<Operation *> order(chain.begin(), chain.end());
+  llvm::sort(order,
+             [](Operation *a, Operation *b) { return a->isBeforeInBlock(b); });
+  order.push_back(root);
+
+  SmallVector<Value> outputs(root->getResults());
+  SmallVector<Operation *> releases;
+  for (Operation *op : chain)
+    for (Operation *user : op->getUsers())
+      if (isa<ReleaseOp>(user))
+        releases.push_back(user);
+
+  auto loc = root->getLoc();
+  rewriter.setInsertionPoint(root);
+  DenseMap<Value, Value> bits;
+  Value valid;
+  for (Operation *op : order) {
+    Fusible fusible = *getFusible(op);
+    auto handle = *llvm::find_if(op->getOperandTypes(), llvm::IsaPred<MpzType>);
+    auto word = rewriter.getIntegerType(
+        DataLayout::closest(op).getTypeSizeInBits(handle).getFixedValue());
+    SmallVector<Value> operands;
+    for (Value operand : op->getOperands()) {
+      if (!isa<MpzType>(operand.getType())) {
+        operands.push_back(
+            fusible.buildRuntimeOperand(rewriter, loc, operand, word));
+        continue;
+      }
+      Value &operandBits = bits[operand];
+      if (!operandBits)
+        operandBits = bridge::MpzToBitsOp::create(rewriter, loc, word, operand);
+      operands.push_back(operandBits);
+    }
+    FastPath fast = fusible.buildFastPath(rewriter, loc, op, operands);
+    bits[op->getResult(0)] = fast.values.front();
+    valid = valid ? arith::AndIOp::create(rewriter, loc, valid, fast.valid)
+                        .getResult()
+                  : fast.valid;
+  }
+
+  auto branch =
+      scf::IfOp::create(rewriter, loc, ValueRange(outputs).getTypes(), valid,
+                        /*withElseRegion=*/true);
+  rewriter.setInsertionPointToStart(&branch.getThenRegion().front());
+  SmallVector<Value> fastResults;
+  for (Value output : outputs)
+    fastResults.push_back(isa<MpzType>(output.getType())
+                              ? bridge::MpzFromBitsOp::create(rewriter, loc,
+                                                              output.getType(),
+                                                              bits[output])
+                                    .getResult()
+                              : bits[output]);
+  scf::YieldOp::create(rewriter, loc, fastResults);
+  rewriter.setInsertionPointToStart(&branch.getElseRegion().front());
+  IRMapping mapping;
+  for (Operation *op : order)
+    rewriter.clone(*op, mapping);
+  for (Operation *release : releases) {
+    rewriter.clone(*release, mapping);
+    rewriter.eraseOp(release);
+  }
+  SmallVector<Value> slowResults;
+  for (Value output : outputs)
+    slowResults.push_back(mapping.lookup(output));
+  scf::YieldOp::create(rewriter, loc, slowResults);
+
+  for (auto [output, result] : llvm::zip(outputs, branch.getResults()))
+    rewriter.replaceAllUsesWith(output, result);
+  for (Operation *op : llvm::reverse(order)) {
+    erased.insert(op);
+    rewriter.eraseOp(op);
+  }
+}
+
+// Fuses every chain, starting from the last operation of each block so that
+// a chain is found from its root.
+void fuseChains(Operation *module) {
+  SmallVector<Operation *> candidates;
+  module->walk([&](Operation *op) {
+    if (getFusible(op))
+      candidates.push_back(op);
+  });
+  FusionRewriter rewriter(module->getContext());
+  DenseSet<Operation *> erased;
+  for (Operation *op : llvm::reverse(candidates))
+    if (!erased.contains(op))
+      fuseChain(op, rewriter, erased);
+}
+
 struct ConvertRCGMPToSCFPass
     : PassWrapper<ConvertRCGMPToSCFPass, OperationPass<ModuleOp>> {
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(ConvertRCGMPToSCFPass)
@@ -1819,6 +1997,7 @@ struct ConvertRCGMPToSCFPass
                     math::MathDialect, memref::MemRefDialect, ub::UBDialect>();
   }
   void runOnOperation() override {
+    fuseChains(getOperation());
     RewritePatternSet patterns(&getContext());
     patterns
         .add<ConstantLowering, ExtSILowering, ExtUILowering, RetainLowering,
