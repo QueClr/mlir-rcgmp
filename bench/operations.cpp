@@ -14,6 +14,7 @@
 #include <string_view>
 #include <tuple>
 #include <utility>
+#include <vector>
 
 extern "C" {
 #define RCGMP_ENTRY(result, name, ...)                                         \
@@ -61,6 +62,8 @@ std::int64_t trunci(void *);
 std::int64_t trunci_overflow(void *);
 std::int64_t log2i(void *);
 std::int64_t shifted_trunci_log2(void *);
+void *gcdi(void *, void *);
+void *euclid(void *, void *);
 }
 
 namespace {
@@ -806,9 +809,84 @@ void registerOthers() {
                                    });
 }
 
+// The runtime integer for a GMP value, with one reference.
+void *fromGmp(mpz_srcptr value) {
+  std::vector<std::uintptr_t> words(mpz_size(value));
+  mpz_export(words.data(), nullptr, -1, sizeof(std::uintptr_t), 0, 0, value);
+  return rcgmp_mpz_from_words(words.data(), words.size(), mpz_sgn(value) < 0,
+                              0);
+}
+
+// Greatest common divisors of operands without and with a large common factor,
+// compiled, by GMP, and by Euclid's algorithm from remainders, as code without
+// gcdi computes them, with nonatomic counting only.
+void registerGcd() {
+  constexpr std::intptr_t factor = 1000003, first = 1234567, second = 7654321;
+  static Integer smallX(smallLhs), smallY(smallRhs), commonX(factor * first),
+      commonY(-factor * second), heapX(lhsWords), heapY(rhsWords),
+      heapCommonX(lhsWords), heapCommonY(lhsWords), longX(0);
+  mpz_mul_si(heapCommonX.value, heapCommonX.value, first);
+  mpz_mul_si(heapCommonY.value, heapCommonY.value, -second);
+  // Sixteen limbs against two, which the runtime divides first.
+  for (std::uintptr_t word : {0x9e3779b97f4a7c15u, 0xbf58476d1ce4e5b9u,
+                              0x94d049bb133111ebu, 0x2545f4914f6cdd1du})
+    for (int repeat = 0; repeat < 4; ++repeat) {
+      mpz_mul_2exp(longX.value, longX.value, 64);
+      mpz_add_ui(longX.value, longX.value, word + repeat);
+    }
+  struct GcdCase {
+    const char *label;
+    mpz_srcptr x, y;
+  };
+  const std::array<GcdCase, 6> cases{{
+      {"/immediates", smallX.value, smallY.value},
+      {"/immediates, common factor", commonX.value, commonY.value},
+      {"/shared heap, immediate", heapX.value, smallY.value},
+      {"/shared heaps", heapX.value, heapY.value},
+      {"/shared heaps, common factor", heapCommonX.value, heapCommonY.value},
+      {"/shared heaps, 16 and 2 limbs", longX.value, heapY.value},
+  }};
+  for (const GcdCase &test : cases) {
+    for (auto [name, op] : {std::pair{"gcdi", gcdi}, {"euclid", euclid}}) {
+      Counted counted = countings[0];
+      counted.binary = op;
+      benchmark::RegisterBenchmark(
+          std::string(name) + test.label, [=](benchmark::State &state) {
+            binaryShared(state, counted, fromGmp(test.x), fromGmp(test.y));
+          });
+    }
+    benchmark::RegisterBenchmark(std::string("gmp gcd") + test.label, gmpBinary,
+                                 mpz_gcd, test.x, test.y);
+  }
+  // The greatest common divisor of x and a multiple of x is x, which a unique
+  // x holds in place.
+  static Integer multiple(lhsWords);
+  mpz_mul_ui(multiple.value, multiple.value, 3);
+  benchmark::RegisterBenchmark(
+      "gcdi/unique heap, shared heap", [](benchmark::State &state) {
+        void *x = heap(lhsWords), *y = fromGmp(multiple.value);
+        for (auto _ : state) {
+          retain(y);
+          x = gcdi(x, y);
+          benchmark::DoNotOptimize(x);
+        }
+        release(x);
+        release(y);
+      });
+  benchmark::RegisterBenchmark("gmp gcd/unique heap, shared heap",
+                               [](benchmark::State &state) {
+                                 Integer x(lhsWords);
+                                 for (auto _ : state) {
+                                   mpz_gcd(x.value, x.value, multiple.value);
+                                   benchmark::DoNotOptimize(x.value);
+                                 }
+                               });
+}
+
 [[maybe_unused]] const int registered =
     (registerBinaries(), registerMonus(), registerUnaries(), registerShifts(),
      registerDivisions(), registerEuclidean(), registerLean(),
-     registerTruncations(), registerLogarithms(), registerOthers(), 0);
+     registerTruncations(), registerLogarithms(), registerOthers(),
+     registerGcd(), 0);
 
 } // namespace

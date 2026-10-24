@@ -11,4 +11,5 @@ export import :bitwise;
 export import :unary;
 export import :shift;
 export import :divide;
+export import :gcd;
 export import :compare;

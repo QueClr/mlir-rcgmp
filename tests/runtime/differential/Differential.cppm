@@ -32,6 +32,8 @@ void *monusi_local(void *, void *);
 void *monusi_atomic(void *, void *);
 void *muli_local(void *, void *);
 void *muli_atomic(void *, void *);
+void *gcdi_local(void *, void *);
+void *gcdi_atomic(void *, void *);
 void *andi_local(void *, void *);
 void *andi_atomic(void *, void *);
 void *xori_local(void *, void *);
@@ -164,7 +166,7 @@ fuzztest::Domain<std::size_t> AnyConstant() {
   return fuzztest::InRange<std::size_t>(0, constantValues.size() - 1);
 }
 
-enum class Operator { addi, subi, monusi, muli, andi, xori, ori };
+enum class Operator { addi, subi, monusi, muli, gcdi, andi, xori, ori };
 
 // The compiled and runtime entry points of an operation, indexed by counting,
 // and the GMP function it must agree with.
@@ -175,7 +177,7 @@ struct Operation {
   Oracle oracle;
 };
 
-constexpr std::array<Operation, 7> operations{{
+constexpr std::array<Operation, 8> operations{{
     {"addi",
      {addi_local, addi_atomic},
      {rcgmp_mpz_add, rcgmp_mpz_add_atomic},
@@ -192,6 +194,10 @@ constexpr std::array<Operation, 7> operations{{
      {muli_local, muli_atomic},
      {rcgmp_mpz_mul, rcgmp_mpz_mul_atomic},
      mpz_mul},
+    {"gcdi",
+     {gcdi_local, gcdi_atomic},
+     {rcgmp_mpz_gcd, rcgmp_mpz_gcd_atomic},
+     mpz_gcd},
     {"andi",
      {andi_local, andi_atomic},
      {rcgmp_mpz_and, rcgmp_mpz_and_atomic},
@@ -207,8 +213,8 @@ constexpr std::array<Operation, 7> operations{{
 }};
 
 constexpr std::array operators{Operator::addi, Operator::subi, Operator::monusi,
-                               Operator::muli, Operator::andi, Operator::xori,
-                               Operator::ori};
+                               Operator::muli, Operator::gcdi, Operator::andi,
+                               Operator::xori, Operator::ori};
 
 const Operation &operation(Operator op) {
   return operations[std::to_underlying(op)];

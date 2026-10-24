@@ -32,6 +32,14 @@ func.func @muli_atomic(%x: !rcgmp.mpz<atomic>, %y: !rcgmp.mpz<atomic>) -> !rcgmp
   %r = rcgmp.muli %x, %y : !rcgmp.mpz<atomic>
   return %r : !rcgmp.mpz<atomic>
 }
+func.func @gcdi_local(%x: !rcgmp.mpz, %y: !rcgmp.mpz) -> !rcgmp.mpz {
+  %r = rcgmp.gcdi %x, %y : !rcgmp.mpz
+  return %r : !rcgmp.mpz
+}
+func.func @gcdi_atomic(%x: !rcgmp.mpz<atomic>, %y: !rcgmp.mpz<atomic>) -> !rcgmp.mpz<atomic> {
+  %r = rcgmp.gcdi %x, %y : !rcgmp.mpz<atomic>
+  return %r : !rcgmp.mpz<atomic>
+}
 func.func @andi_local(%x: !rcgmp.mpz, %y: !rcgmp.mpz) -> !rcgmp.mpz {
   %r = rcgmp.andi %x, %y : !rcgmp.mpz
   return %r : !rcgmp.mpz

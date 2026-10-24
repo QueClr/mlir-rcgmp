@@ -164,6 +164,46 @@ OpFoldResult MulIOp::fold(FoldAdaptor adaptor) {
       });
 }
 
+OpFoldResult GcdIOp::fold(FoldAdaptor adaptor) {
+  return foldBinary(
+      *this, adaptor.getOperands(),
+      [](const APInt &lhs, const APInt &rhs) -> std::optional<APInt> {
+        // The time to compute grows with the square of the width.
+        if (lhs.getSignificantBits() > maxFoldedBits ||
+            rhs.getSignificantBits() > maxFoldedBits)
+          return std::nullopt;
+        // One extra bit holds the absolute value of either minimum, which
+        // bounds the nonnegative result.
+        auto [a, b] = widened(lhs, rhs, 1);
+        return llvm::APIntOps::GreatestCommonDivisor(a.abs(), b.abs());
+      });
+}
+
+// Constant operands of a commutative operation sort to the right. With zero,
+// the greatest common divisor is the absolute value of the other operand, and
+// with one or minus one it is one, so neither computes it.
+static LogicalResult simplifyGcdWithConstant(GcdIOp op,
+                                             PatternRewriter &rewriter) {
+  auto constant = op.getRhs().getDefiningOp<ConstantOp>();
+  if (!constant)
+    return failure();
+  APInt value = constant.getValue();
+  if (value.isZero()) {
+    rewriter.replaceOpWithNewOp<AbsIOp>(op, op.getType(), op.getLhs());
+    return success();
+  }
+  if (!value.sext(value.getBitWidth() + 1).abs().isOne())
+    return failure();
+  ReleaseOp::create(rewriter, op.getLoc(), op.getLhs());
+  rewriter.replaceOpWithNewOp<ConstantOp>(op, op.getType(), APInt(2, 1));
+  return success();
+}
+
+void GcdIOp::getCanonicalizationPatterns(RewritePatternSet &results,
+                                         MLIRContext *) {
+  results.add(simplifyGcdWithConstant);
+}
+
 OpFoldResult AndIOp::fold(FoldAdaptor adaptor) {
   return foldBinary(*this, adaptor.getOperands(),
                     [](const APInt &lhs, const APInt &rhs) {

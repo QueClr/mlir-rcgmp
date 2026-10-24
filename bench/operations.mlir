@@ -374,3 +374,24 @@ func.func @shifted_trunci_log2(%x: !rcgmp.mpz) -> i64 {
   %log = arith.addi %r#1, %low : i64
   return %log : i64
 }
+func.func @gcdi(%x: !rcgmp.mpz, %y: !rcgmp.mpz) -> !rcgmp.mpz {
+  %r = rcgmp.gcdi %x, %y : !rcgmp.mpz
+  return %r : !rcgmp.mpz
+}
+// The same result by Euclid's algorithm, from remainders.
+func.func @euclid(%x: !rcgmp.mpz, %y: !rcgmp.mpz) -> !rcgmp.mpz {
+  %a = rcgmp.absi %x : !rcgmp.mpz
+  %b = rcgmp.absi %y : !rcgmp.mpz
+  %r:2 = scf.while (%u = %a, %v = %b) : (!rcgmp.mpz, !rcgmp.mpz) -> (!rcgmp.mpz, !rcgmp.mpz) {
+    %zero = rcgmp.constant 0 : !rcgmp.mpz
+    %more = rcgmp.cmpi ne, %v, %zero : !rcgmp.mpz
+    scf.condition(%more) %u, %v : !rcgmp.mpz, !rcgmp.mpz
+  } do {
+  ^bb0(%u: !rcgmp.mpz, %v: !rcgmp.mpz):
+    rcgmp.retain %v : !rcgmp.mpz
+    %m = rcgmp.remsi %u, %v divzero<undefined> : !rcgmp.mpz
+    scf.yield %v, %m : !rcgmp.mpz, !rcgmp.mpz
+  }
+  rcgmp.release %r#1 : !rcgmp.mpz
+  return %r#0 : !rcgmp.mpz
+}

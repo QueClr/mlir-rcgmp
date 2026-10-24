@@ -277,6 +277,7 @@ void FoldsMatchGmp(const std::pair<Integer, Integer> &operands, unsigned amount,
   checkBinary<mlir::rcgmp::SubIOp>(x, y, mpz_sub);
   checkBinary<mlir::rcgmp::MonusIOp>(x, y, ::rcgmp::test::gmpMonus);
   checkBinary<mlir::rcgmp::MulIOp>(x, y, mpz_mul);
+  checkBinary<mlir::rcgmp::GcdIOp>(x, y, mpz_gcd);
   checkBinary<mlir::rcgmp::AndIOp>(x, y, mpz_and);
   checkBinary<mlir::rcgmp::OrIOp>(x, y, mpz_ior);
   checkBinary<mlir::rcgmp::XOrIOp>(x, y, mpz_xor);
@@ -292,5 +293,21 @@ void FoldsMatchGmp(const std::pair<Integer, Integer> &operands, unsigned amount,
 FUZZ_TEST(Fold, FoldsMatchGmp)
     .WithDomains(::rcgmp::test::AnyOperands(), fuzztest::InRange(0u, 400u),
                  fuzztest::InRange(1u, 200u));
+
+// Operands with common factors, whose greatest common divisor is not one.
+void GcdFoldsMatchGmp(const std::pair<Integer, Integer> &operands) {
+  checkBinary<mlir::rcgmp::GcdIOp>(operands.first, operands.second, mpz_gcd);
+}
+FUZZ_TEST(Fold, GcdFoldsMatchGmp).WithDomains(::rcgmp::test::AnyGcdOperands());
+
+// Operands past 4096 bits stay computed at run time, even when the result is
+// small.
+TEST(Fold, KeepsGcdOfWideOperands) {
+  Folder folder;
+  Value wide = folder.mpz(Integer::powerOfTwo(5000));
+  EXPECT_EQ(mpzValue(folder.fold<mlir::rcgmp::GcdIOp>(
+                folder.mpzType(), wide, folder.mpz(Integer(6)))[0]),
+            std::nullopt);
+}
 
 } // namespace

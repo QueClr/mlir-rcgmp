@@ -417,6 +417,27 @@ fuzztest::Domain<std::pair<Integer, Integer>> AnyOperands() {
                              AnyInteger(), AnyRelation()));
 }
 
+// Operands g*p*2^i and g*q*2^j, whose greatest common divisor is a multiple
+// of g and of a power of two, which independent operands almost never share.
+// Factors of up to 24 words make operands of very different lengths. Products
+// with a zero factor and independent operands are included.
+fuzztest::Domain<std::pair<Integer, Integer>> AnyGcdOperands() {
+  auto factor = fuzztest::OneOf(AnyInteger(), AnyWords(24));
+  auto shift = fuzztest::InRange(0u, 3u * GMP_NUMB_BITS);
+  return fuzztest::OneOf(AnyOperands(),
+                         fuzztest::Map(
+                             [](const Integer &g, const Integer &p,
+                                const Integer &q, unsigned i, unsigned j) {
+                               Integer x, y;
+                               mpz_mul(x, g, p);
+                               mpz_mul_2exp(x, x, i);
+                               mpz_mul(y, g, q);
+                               mpz_mul_2exp(y, y, j);
+                               return std::pair{x, y};
+                             },
+                             factor, factor, factor, shift, shift));
+}
+
 fuzztest::Domain<Sharing> AnySharing() {
   return fuzztest::StructOf<Sharing>(fuzztest::Arbitrary<bool>(),
                                      fuzztest::Arbitrary<bool>());

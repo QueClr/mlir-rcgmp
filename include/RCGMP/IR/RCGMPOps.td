@@ -127,6 +127,15 @@ def RCGMP_MulIOp : RCGMP_BinaryOp<"muli", [{
   let summary = "Consume two integer references and produce their product";
 }
 
+def RCGMP_GcdIOp : RCGMP_BinaryOp<"gcdi", [{
+    The result is the greatest common divisor of the absolute values of the
+    operands, which is never negative. The greatest common divisor of zero and
+    x is the absolute value of x, so that of two zeros is zero.
+  }], [Commutative]> {
+  let summary = "Consume two integer references and produce their greatest common divisor";
+  let hasCanonicalizer = 1;
+}
+
 def RCGMP_AndIOp : RCGMP_BinaryOp<"andi", [{
     Operands are interpreted as infinite two's-complement bit strings, including
     sign extension for negative integers.

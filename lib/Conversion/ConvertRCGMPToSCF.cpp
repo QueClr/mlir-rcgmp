@@ -240,6 +240,142 @@ struct MulILowering : FastPathLowering<MulILowering> {
   }
 };
 
+// The greatest common divisor of two immediates, by Stein's binary algorithm,
+// which replaces division by subtraction and shifts.
+struct GcdILowering : FastPathLowering<GcdILowering> {
+  using FastPathLowering::FastPathLowering;
+  using Op = GcdIOp;
+
+  static StringRef getRuntimeName(bool atomic) {
+    return atomic ? "rcgmp_mpz_gcd_atomic" : "rcgmp_mpz_gcd";
+  }
+
+  static FastPath buildFastPath(PatternRewriter &rewriter, Location loc,
+                                Operation *, ValueRange operands) {
+    Value lhs = operands[0], rhs = operands[1];
+    auto type = cast<IntegerType>(lhs.getType());
+    unsigned width = type.getWidth();
+    Value zero = arith::ConstantIntOp::create(rewriter, loc, 0, width);
+    Value one = arith::ConstantIntOp::create(rewriter, loc, 1, width);
+    Value both = allImmediate(rewriter, loc, {lhs, rhs});
+    // The loop runs only for immediates; heap handles take the runtime.
+    auto branch = scf::IfOp::create(rewriter, loc, TypeRange{type}, both,
+                                    /*withElseRegion=*/true);
+    rewriter.setInsertionPointToStart(&branch.getThenRegion().front());
+    // Clearing the tag of 4*x+1 leaves 4*x, whose absolute value 4*|x| is at
+    // most 2^(W-1), read as unsigned. The greatest common divisor of these is
+    // 4*gcd(x, y), already shifted into place for tagging.
+    auto magnitude = [&](Value bits) -> Value {
+      return math::AbsIOp::create(
+          rewriter, loc, arith::XOrIOp::create(rewriter, loc, bits, one));
+    };
+    auto [a, b] =
+        reduceUnbalanced(rewriter, loc, magnitude(lhs), magnitude(rhs), zero);
+    scf::YieldOp::create(rewriter, loc, binaryGcd(rewriter, loc, a, b, zero));
+    rewriter.setInsertionPointToStart(&branch.getElseRegion().front());
+    scf::YieldOp::create(rewriter, loc, zero);
+    rewriter.setInsertionPointAfter(branch);
+    // Only 4*2^(W-3), the greatest common divisor of the immediate minimum
+    // and zero or itself, is not immediate, and its sign bit is set.
+    Value scaled = branch.getResult(0);
+    auto fits = arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::sge,
+                                      scaled, zero);
+    auto valid = arith::AndIOp::create(rewriter, loc, both, fits);
+    auto tagged = arith::OrIOp::create(rewriter, loc, scaled, one);
+    return {{tagged}, valid};
+  }
+
+private:
+  // The binary algorithm removes about two bits per step, so a much larger
+  // operand takes many steps, as one or minus one does with any other;
+  // dividing it by the smaller once leaves operands of similar size. Eight
+  // bits take about as long to remove by steps as a division does on recent
+  // processors, so an operand is much larger when it exceeds the other times
+  // 2^8. The remainder of 4*x by 4*y is 4*(x mod y).
+  static std::pair<Value, Value> reduceUnbalanced(PatternRewriter &rewriter,
+                                                  Location loc, Value a,
+                                                  Value b, Value zero) {
+    Type type = a.getType();
+    Value eight = arith::ConstantIntOp::create(
+        rewriter, loc, 8, cast<IntegerType>(type).getWidth());
+    auto exceeds = [&](Value value, Value other) -> Value {
+      auto shifted = arith::ShRUIOp::create(rewriter, loc, value, eight);
+      auto above = arith::CmpIOp::create(
+          rewriter, loc, arith::CmpIPredicate::ugt, shifted, other);
+      auto nonzero = arith::CmpIOp::create(
+          rewriter, loc, arith::CmpIPredicate::ne, other, zero);
+      return arith::AndIOp::create(rewriter, loc, above, nonzero);
+    };
+    auto unbalanced =
+        arith::OrIOp::create(rewriter, loc, exceeds(a, b), exceeds(b, a));
+    auto branch = scf::IfOp::create(rewriter, loc, TypeRange{type, type},
+                                    unbalanced, /*withElseRegion=*/true);
+    rewriter.setInsertionPointToStart(&branch.getThenRegion().front());
+    Value larger = arith::MaxUIOp::create(rewriter, loc, a, b);
+    Value smaller = arith::MinUIOp::create(rewriter, loc, a, b);
+    Value remainder = arith::RemUIOp::create(rewriter, loc, larger, smaller);
+    scf::YieldOp::create(rewriter, loc, ValueRange{remainder, smaller});
+    rewriter.setInsertionPointToStart(&branch.getElseRegion().front());
+    scf::YieldOp::create(rewriter, loc, ValueRange{a, b});
+    rewriter.setInsertionPointAfter(branch);
+    return {branch.getResult(0), branch.getResult(1)};
+  }
+
+  // The greatest common divisor of a and b, multiples of four of at most
+  // 2^(W-1).
+  static Value binaryGcd(PatternRewriter &rewriter, Location loc, Value a,
+                         Value b, Value zero) {
+    Type type = a.getType();
+    unsigned width = cast<IntegerType>(type).getWidth();
+    // With the top bit set, a count of trailing zeros never reaches the width,
+    // so that shifting by it is defined, and zero shifts to zero.
+    Value top = arith::ConstantOp::create(
+        rewriter, loc,
+        rewriter.getIntegerAttr(type, APInt::getSignedMinValue(width)));
+    auto trailingZeros = [&](Value value) -> Value {
+      return math::CountTrailingZerosOp::create(
+          rewriter, loc, arith::OrIOp::create(rewriter, loc, value, top));
+    };
+    auto oddPart = [&](Value value) -> Value {
+      return arith::ShRUIOp::create(rewriter, loc, value, trailingZeros(value));
+    };
+    // The power of two that both share is restored at the end. A zero operand
+    // takes the odd part of the other, so that the loop finds it at once.
+    Value shift = trailingZeros(arith::OrIOp::create(rewriter, loc, a, b));
+    auto nonzeroOr = [&](Value value, Value other) -> Value {
+      auto isZero = arith::CmpIOp::create(
+          rewriter, loc, arith::CmpIPredicate::eq, value, zero);
+      return arith::SelectOp::create(rewriter, loc, isZero, other, value);
+    };
+    Value u = oddPart(nonzeroOr(a, b)), v = oddPart(nonzeroOr(b, a));
+    // Both odd parts are below 2^(W-3), so the sign of their difference orders
+    // them. Each step replaces the larger by the odd part of the difference,
+    // which is even and nonzero, until the two meet at the odd part of the
+    // greatest common divisor.
+    auto loop = scf::WhileOp::create(rewriter, loc, TypeRange{type, type, type},
+                                     ValueRange{u, v});
+    Block *before =
+        rewriter.createBlock(&loop.getBefore(), {}, {type, type}, {loc, loc});
+    Value first = before->getArgument(0), second = before->getArgument(1);
+    Value difference = arith::SubIOp::create(rewriter, loc, first, second);
+    auto differ = arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::ne,
+                                        difference, zero);
+    scf::ConditionOp::create(rewriter, loc, differ,
+                             ValueRange{difference, first, second});
+    Block *after = rewriter.createBlock(&loop.getAfter(), {},
+                                        {type, type, type}, {loc, loc, loc});
+    Value step = after->getArgument(0);
+    Value smaller = arith::MinUIOp::create(rewriter, loc, after->getArgument(1),
+                                           after->getArgument(2));
+    Value reduced = arith::ShRUIOp::create(
+        rewriter, loc, math::AbsIOp::create(rewriter, loc, step),
+        math::CountTrailingZerosOp::create(rewriter, loc, step));
+    scf::YieldOp::create(rewriter, loc, ValueRange{reduced, smaller});
+    rewriter.setInsertionPointAfter(loop);
+    return arith::ShLIOp::create(rewriter, loc, loop.getResult(1), shift);
+  }
+};
+
 struct AndILowering : FastPathLowering<AndILowering> {
   using FastPathLowering::FastPathLowering;
   using Op = AndIOp;
@@ -1148,9 +1284,9 @@ struct ConvertRCGMPToSCFPass
     RewritePatternSet patterns(&getContext());
     patterns.add<ConstantLowering, ExtSILowering, ExtUILowering, RetainLowering,
                  ReleaseLowering, AddILowering, SubILowering, MonusILowering,
-                 MulILowering, AndILowering, XOrILowering, OrILowering,
-                 NotILowering, NegILowering, AbsILowering, ShLILowering,
-                 ShRSILowering, DivSILowering, RemSILowering,
+                 MulILowering, GcdILowering, AndILowering, XOrILowering,
+                 OrILowering, NotILowering, NegILowering, AbsILowering,
+                 ShLILowering, ShRSILowering, DivSILowering, RemSILowering,
                  FloorDivSILowering, FloorModSILowering, DivRemSILowering,
                  FloorDivModSILowering, EDivSILowering, EModSILowering,
                  EDivModSILowering, CmpILowering, TruncationLowering<TruncIOp>,
@@ -1160,10 +1296,10 @@ struct ConvertRCGMPToSCFPass
     ConversionTarget target(getContext());
     target.addIllegalOp<
         ConstantOp, ExtSIOp, ExtUIOp, RetainOp, ReleaseOp, AddIOp, SubIOp,
-        MonusIOp, MulIOp, AndIOp, XOrIOp, OrIOp, NotIOp, NegIOp, AbsIOp, ShLIOp,
-        ShRSIOp, DivSIOp, RemSIOp, FloorDivSIOp, FloorModSIOp, DivRemSIOp,
-        FloorDivModSIOp, EDivSIOp, EModSIOp, EDivModSIOp, CmpIOp, TruncIOp,
-        TruncIOverflowOp, Log2IOp, MatchOp, YieldOp>();
+        MonusIOp, MulIOp, GcdIOp, AndIOp, XOrIOp, OrIOp, NotIOp, NegIOp, AbsIOp,
+        ShLIOp, ShRSIOp, DivSIOp, RemSIOp, FloorDivSIOp, FloorModSIOp,
+        DivRemSIOp, FloorDivModSIOp, EDivSIOp, EModSIOp, EDivModSIOp, CmpIOp,
+        TruncIOp, TruncIOverflowOp, Log2IOp, MatchOp, YieldOp>();
     target.markUnknownOpDynamicallyLegal([](Operation *) { return true; });
     if (failed(applyPartialConversion(getOperation(), target,
                                       std::move(patterns))))

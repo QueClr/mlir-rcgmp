@@ -47,6 +47,12 @@ void *rcgmp_mpz_or_atomic(void *lhs, void *rhs, uint32_t reuse);
 void *rcgmp_mpz_xor(void *lhs, void *rhs, uint32_t reuse);
 void *rcgmp_mpz_xor_atomic(void *lhs, void *rhs, uint32_t reuse);
 
+// The greatest common divisor of the absolute values of lhs and rhs, with the
+// ownership and reuse contract of the binary operations. It is never negative,
+// and that of zero and x is the absolute value of x.
+void *rcgmp_mpz_gcd(void *lhs, void *rhs, uint32_t reuse);
+void *rcgmp_mpz_gcd_atomic(void *lhs, void *rhs, uint32_t reuse);
+
 // Consume one reference and return one owned result. reuse bit 0 permits
 // reusing the operand; set it only for a heap operand proven uniquely owned.
 // The complement of x is -x - 1, as in infinite two's complement.
