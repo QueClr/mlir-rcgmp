@@ -161,6 +161,25 @@ func.func @constant() -> i64 {
   return %r : i64
 }
 
+// An arm that yields its argument yields the constant distance.
+// CHECK-LABEL: func.func @constant_yields_argument
+// CHECK-NOT: rcgmp.match
+// CHECK: %[[K:.*]] = rcgmp.constant 4 : !rcgmp.mpz
+// CHECK-NEXT: return %[[K]]
+func.func @constant_yields_argument() -> !rcgmp.mpz {
+  %c = rcgmp.constant 5 : !rcgmp.mpz
+  %r = rcgmp.match %c : !rcgmp.mpz -> !rcgmp.mpz {
+    case 0 {
+      %z = rcgmp.constant 0 : !rcgmp.mpz
+      rcgmp.yield %z : !rcgmp.mpz
+    }
+    at_least 1 (%k) {
+      rcgmp.yield %k : !rcgmp.mpz
+    }
+  }
+  return %r : !rcgmp.mpz
+}
+
 // Nested negSucc patterns join their parent in the mirrored direction: the
 // inner at_least 1 on -1 - n binds -2 - n.
 // CHECK-LABEL: func.func @predecessors

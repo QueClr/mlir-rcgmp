@@ -1266,10 +1266,12 @@ struct FoldConstantScrutinee : OpRewritePattern<MatchOp> {
                                                constant.getType(), distance));
       }
     }
+    // Read the results after inlining, which replaces the arm's argument: an
+    // arm may yield its argument itself.
     Operation *yield = block.getTerminator();
+    rewriter.inlineBlockBefore(&block, op, arguments);
     SmallVector<Value> results(yield->getOperands());
     rewriter.eraseOp(yield);
-    rewriter.inlineBlockBefore(&block, op, arguments);
     rewriter.replaceOp(op, results);
     return success();
   }
