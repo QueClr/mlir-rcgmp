@@ -7,6 +7,7 @@
 #include <mlir/Dialect/Arith/IR/Arith.h>
 #include <mlir/Dialect/ControlFlow/IR/ControlFlowOps.h>
 #include <mlir/Dialect/Func/IR/FuncOps.h>
+#include <mlir/Dialect/Math/IR/Math.h>
 #include <mlir/Dialect/MemRef/IR/MemRef.h>
 #include <mlir/Dialect/SCF/IR/SCF.h>
 #include <mlir/Dialect/UB/IR/UBOps.h>
@@ -921,6 +922,74 @@ struct TruncationLowering : OpRewritePattern<TruncOp> {
   }
 };
 
+// Lowers rcgmp.log2i inline. The magnitude of an integer is a word m preceded
+// by k words, so its logarithm is W * k plus that of m, with W the handle
+// width; the logarithm of a nonzero m is W - 1 minus its leading zeros. Each
+// path yields k and m, so that one count of leading zeros serves both.
+struct Log2ILowering : OpRewritePattern<Log2IOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(Log2IOp op,
+                                PatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto type = cast<IntegerType>(op.getType());
+    Value integer = op.getValue();
+    unsigned width = DataLayout::closest(op)
+                         .getTypeSizeInBits(integer.getType())
+                         .getFixedValue();
+    auto word = rewriter.getIntegerType(width);
+    auto constant = [&](IntegerType type, int64_t value) -> Value {
+      return arith::ConstantIntOp::create(rewriter, loc, type, value);
+    };
+    auto immediate = bridge::MpzIsImmediateOp::create(rewriter, loc, integer);
+    auto branch = scf::IfOp::create(rewriter, loc, TypeRange{word, word},
+                                    immediate, /*withElseRegion=*/true);
+    rewriter.setInsertionPointToStart(&branch.getThenRegion().front());
+    // Untagging leaves a value above the signed word minimum, whose absolute
+    // value does not overflow.
+    Value bits = bridge::MpzToBitsOp::create(rewriter, loc, word, integer);
+    Value x = arith::ShRSIOp::create(rewriter, loc, bits, constant(word, 2));
+    scf::YieldOp::create(
+        rewriter, loc,
+        ValueRange{constant(word, 0), math::AbsIOp::create(rewriter, loc, x)});
+    rewriter.setInsertionPointToStart(&branch.getElseRegion().front());
+    // The most significant limb of a heap integer is nonzero.
+    Value size = bridge::MpzSizeOp::create(rewriter, loc, word, integer);
+    Value top = arith::SubIOp::create(rewriter, loc,
+                                      math::AbsIOp::create(rewriter, loc, size),
+                                      constant(word, 1));
+    Value limb = bridge::MpzLimbOp::create(
+        rewriter, loc, word, integer,
+        arith::IndexCastUIOp::create(rewriter, loc, rewriter.getIndexType(),
+                                     top));
+    scf::YieldOp::create(rewriter, loc, ValueRange{top, limb});
+    rewriter.setInsertionPointAfter(branch);
+    // Setting the lowest bit of m maps zero to one, whose logarithm is also
+    // zero, and changes no other logarithm. It also proves m nonzero to LLVM,
+    // which then counts leading zeros without a zero check.
+    Value m = arith::OrIOp::create(rewriter, loc, branch.getResult(1),
+                                   constant(word, 1));
+    Value zeros = math::CountLeadingZerosOp::create(rewriter, loc, m);
+    Value low =
+        arith::SubIOp::create(rewriter, loc, constant(word, width - 1), zeros);
+    // A result wider than the handle holds every logarithm, which W * k may
+    // not fit the handle for.
+    auto wide = type.getWidth() > width ? type : word;
+    Value k = branch.getResult(0);
+    if (wide != word) {
+      k = arith::ExtUIOp::create(rewriter, loc, wide, k);
+      low = arith::ExtUIOp::create(rewriter, loc, wide, low);
+    }
+    Value log = arith::AddIOp::create(
+        rewriter, loc,
+        arith::MulIOp::create(rewriter, loc, k, constant(wide, width)), low);
+    if (type.getWidth() < width)
+      log = arith::TruncIOp::create(rewriter, loc, type, log);
+    rewriter.replaceOp(op, log);
+    return success();
+  }
+};
+
 struct CmpILowering : FastPathLowering<CmpILowering> {
   using FastPathLowering::FastPathLowering;
   using Op = CmpIOp;
@@ -1073,7 +1142,7 @@ struct ConvertRCGMPToSCFPass
   void getDependentDialects(DialectRegistry &registry) const override {
     registry.insert<RCGMPDialect, scf::SCFDialect, arith::ArithDialect,
                     cf::ControlFlowDialect, func::FuncDialect,
-                    memref::MemRefDialect, ub::UBDialect>();
+                    math::MathDialect, memref::MemRefDialect, ub::UBDialect>();
   }
   void runOnOperation() override {
     RewritePatternSet patterns(&getContext());
@@ -1085,15 +1154,16 @@ struct ConvertRCGMPToSCFPass
                  FloorDivSILowering, FloorModSILowering, DivRemSILowering,
                  FloorDivModSILowering, EDivSILowering, EModSILowering,
                  EDivModSILowering, CmpILowering, TruncationLowering<TruncIOp>,
-                 TruncationLowering<TruncIOverflowOp>>(&getContext());
+                 TruncationLowering<TruncIOverflowOp>, Log2ILowering>(
+        &getContext());
     populateMatchLoweringPatterns(patterns);
     ConversionTarget target(getContext());
-    target.addIllegalOp<ConstantOp, ExtSIOp, ExtUIOp, RetainOp, ReleaseOp,
-                        AddIOp, SubIOp, MonusIOp, MulIOp, AndIOp, XOrIOp, OrIOp,
-                        NotIOp, NegIOp, AbsIOp, ShLIOp, ShRSIOp, DivSIOp,
-                        RemSIOp, FloorDivSIOp, FloorModSIOp, DivRemSIOp,
-                        FloorDivModSIOp, EDivSIOp, EModSIOp, EDivModSIOp,
-                        CmpIOp, TruncIOp, TruncIOverflowOp, MatchOp, YieldOp>();
+    target.addIllegalOp<
+        ConstantOp, ExtSIOp, ExtUIOp, RetainOp, ReleaseOp, AddIOp, SubIOp,
+        MonusIOp, MulIOp, AndIOp, XOrIOp, OrIOp, NotIOp, NegIOp, AbsIOp, ShLIOp,
+        ShRSIOp, DivSIOp, RemSIOp, FloorDivSIOp, FloorModSIOp, DivRemSIOp,
+        FloorDivModSIOp, EDivSIOp, EModSIOp, EDivModSIOp, CmpIOp, TruncIOp,
+        TruncIOverflowOp, Log2IOp, MatchOp, YieldOp>();
     target.markUnknownOpDynamicallyLegal([](Operation *) { return true; });
     if (failed(applyPartialConversion(getOperation(), target,
                                       std::move(patterns))))

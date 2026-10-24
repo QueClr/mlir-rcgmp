@@ -59,6 +59,8 @@ void *guarded_emodsi(void *, void *);
 rcgmp_mpz_qr divremsi(void *, void *);
 std::int64_t trunci(void *);
 std::int64_t trunci_overflow(void *);
+std::int64_t log2i(void *);
+std::int64_t shifted_trunci_log2(void *);
 }
 
 namespace {
@@ -672,6 +674,33 @@ void registerTruncations() {
   }
 }
 
+// Logarithms of borrowed integers, the same logarithms found by shifting and
+// truncating, and GMP counting bits, which it counts as one for zero.
+void registerLogarithms() {
+  static Integer smallX(smallLhs), heapX(lhsWords);
+  for (auto [label, x, gmp] :
+       {std::tuple{"/immediate", immediate(smallLhs), &smallX},
+        {"/heap", heap(lhsWords), &heapX}}) {
+    for (auto [name, op] : {std::pair{"log2i", log2i},
+                            {"shifted trunci log2", shifted_trunci_log2}})
+      benchmark::RegisterBenchmark(std::string(name) + label,
+                                   [=](benchmark::State &state) {
+                                     for (auto _ : state) {
+                                       benchmark::DoNotOptimize(x);
+                                       benchmark::DoNotOptimize(op(x));
+                                     }
+                                   });
+    benchmark::RegisterBenchmark(
+        std::string("gmp sizeinbase") + label, [=](benchmark::State &state) {
+          mpz_srcptr y = gmp->value;
+          for (auto _ : state) {
+            benchmark::DoNotOptimize(y);
+            benchmark::DoNotOptimize(mpz_sgn(y) ? mpz_sizeinbase(y, 2) - 1 : 0);
+          }
+        });
+  }
+}
+
 void registerOthers() {
   static Integer smallX(smallLhs), smallY(smallRhs), heapX(lhsWords),
       heapY(rhsWords), five(5);
@@ -780,6 +809,6 @@ void registerOthers() {
 [[maybe_unused]] const int registered =
     (registerBinaries(), registerMonus(), registerUnaries(), registerShifts(),
      registerDivisions(), registerEuclidean(), registerLean(),
-     registerTruncations(), registerOthers(), 0);
+     registerTruncations(), registerLogarithms(), registerOthers(), 0);
 
 } // namespace

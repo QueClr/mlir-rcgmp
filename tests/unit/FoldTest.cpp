@@ -255,6 +255,21 @@ void checkConversions(const Integer &x, unsigned width) {
       << "extui i" << width << " of " << x;
 }
 
+// Logarithms of the magnitude, zero for zero, as a word and reduced modulo
+// 2^width.
+void checkLogs(const Integer &x, unsigned width) {
+  Folder folder;
+  Integer log(x.sign() ? static_cast<long>(mpz_sizeinbase(x, 2) - 1) : 0L);
+  for (unsigned bits : {64u, width}) {
+    std::optional<APInt> folded =
+        integerValue(folder.fold<mlir::rcgmp::Log2IOp>(folder.integerType(bits),
+                                                       folder.mpz(x))[0]);
+    ASSERT_TRUE(folded);
+    EXPECT_EQ(fromAPInt(*folded, true), wrapped(log, bits, true))
+        << "log2i i" << bits << " " << x;
+  }
+}
+
 void FoldsMatchGmp(const std::pair<Integer, Integer> &operands, unsigned amount,
                    unsigned width) {
   auto &[x, y] = operands;
@@ -272,6 +287,7 @@ void FoldsMatchGmp(const std::pair<Integer, Integer> &operands, unsigned amount,
   checkDivisions(x, y);
   checkComparisons(x, y);
   checkConversions(x, width);
+  checkLogs(x, width);
 }
 FUZZ_TEST(Fold, FoldsMatchGmp)
     .WithDomains(::rcgmp::test::AnyOperands(), fuzztest::InRange(0u, 400u),

@@ -338,3 +338,39 @@ func.func @trunci_overflow(%x: !rcgmp.mpz) -> i64 {
   %r = arith.xori %v, %e : i64
   return %r : i64
 }
+func.func @log2i(%x: !rcgmp.mpz) -> i64 {
+  %r = rcgmp.log2i %x : !rcgmp.mpz to i64
+  return %r : i64
+}
+// The same logarithm of a nonnegative integer without rcgmp.log2i: shift a
+// copy right by a word until it fits one, and count the leading zeros of that
+// word.
+func.func @shifted_trunci_log2(%x: !rcgmp.mpz) -> i64 {
+  %zero = arith.constant 0 : i64
+  %one = arith.constant 1 : i64
+  %top = arith.constant 63 : i64
+  %word = arith.constant 64 : i64
+  %v, %o = rcgmp.trunci_overflow %x unsigned : !rcgmp.mpz to i64
+  %r:2 = scf.if %o -> (i64, i64) {
+    rcgmp.retain %x : !rcgmp.mpz
+    %first = rcgmp.shrsi %x, %word : !rcgmp.mpz, i64
+    %w:3 = scf.while (%y = %first, %k = %word) : (!rcgmp.mpz, i64) -> (!rcgmp.mpz, i64, i64) {
+      %low, %wide = rcgmp.trunci_overflow %y unsigned : !rcgmp.mpz to i64
+      scf.condition(%wide) %y, %k, %low : !rcgmp.mpz, i64, i64
+    } do {
+    ^bb0(%y: !rcgmp.mpz, %k: i64, %low: i64):
+      %z = rcgmp.shrsi %y, %word : !rcgmp.mpz, i64
+      %next = arith.addi %k, %word : i64
+      scf.yield %z, %next : !rcgmp.mpz, i64
+    }
+    rcgmp.release %w#0 : !rcgmp.mpz
+    scf.yield %w#2, %w#1 : i64, i64
+  } else {
+    scf.yield %v, %zero : i64, i64
+  }
+  %nonzero = arith.ori %r#0, %one : i64
+  %zeros = math.ctlz %nonzero : i64
+  %low = arith.subi %top, %zeros : i64
+  %log = arith.addi %r#1, %low : i64
+  return %log : i64
+}

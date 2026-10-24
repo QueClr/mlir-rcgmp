@@ -6,6 +6,7 @@
 #include <mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h>
 #include <mlir/Conversion/ConvertToLLVM/ToLLVMPass.h>
 #include <mlir/Conversion/FuncToLLVM/ConvertFuncToLLVM.h>
+#include <mlir/Conversion/MathToLLVM/MathToLLVM.h>
 #include <mlir/Conversion/MemRefToLLVM/MemRefToLLVM.h>
 #include <mlir/Conversion/ReconcileUnrealizedCasts/ReconcileUnrealizedCasts.h>
 #include <mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h>
@@ -15,6 +16,7 @@
 #include <mlir/Dialect/DLTI/DLTI.h>
 #include <mlir/Dialect/Func/IR/FuncOps.h>
 #include <mlir/Dialect/LLVMIR/LLVMDialect.h>
+#include <mlir/Dialect/Math/IR/Math.h>
 #include <mlir/Dialect/MemRef/IR/MemRef.h>
 #include <mlir/Dialect/SCF/IR/SCF.h>
 #include <mlir/Dialect/UB/IR/UBOps.h>
@@ -34,12 +36,13 @@ int main(int argc, char **argv) {
   registry.insert<mlir::rcgmp::RCGMPDialect, mlir::func::FuncDialect,
                   mlir::cf::ControlFlowDialect, mlir::DLTIDialect,
                   mlir::arith::ArithDialect, mlir::scf::SCFDialect,
-                  mlir::LLVM::LLVMDialect, mlir::memref::MemRefDialect,
-                  mlir::ub::UBDialect>();
+                  mlir::LLVM::LLVMDialect, mlir::math::MathDialect,
+                  mlir::memref::MemRefDialect, mlir::ub::UBDialect>();
   mlir::rcgmp::registerConvertRCGMPToLLVMInterface(registry);
   mlir::registerConvertFuncToLLVMInterface(registry);
   mlir::cf::registerConvertControlFlowToLLVMInterface(registry);
   mlir::arith::registerConvertArithToLLVMInterface(registry);
+  mlir::registerConvertMathToLLVMInterface(registry);
   mlir::ub::registerConvertUBToLLVMInterface(registry);
   mlir::registerConvertMemRefToLLVMInterface(registry);
   mlir::registerPass([] { return mlir::rcgmp::createConvertRCGMPToSCFPass(); });

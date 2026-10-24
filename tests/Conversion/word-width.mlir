@@ -159,6 +159,20 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<!llvm.ptr, dense<
     %v = rcgmp.trunci %x overflow<nsw> : !rcgmp.mpz to i32
     return %v : i32
   }
+  // Logarithms count the leading zeros of a 32-bit word, and count 32 bits
+  // per limb below it. A wider result holds every logarithm, so the limbs are
+  // counted at its width.
+  // CHECK-LABEL: llvm.func @log2
+  // CHECK: "llvm.intr.ctlz"(%{{.*}}) <{is_zero_poison = false}> : (i32) -> i32
+  // CHECK: llvm.mlir.constant(31 : i32)
+  // CHECK: llvm.zext %{{.*}} : i32 to i64
+  // CHECK: llvm.zext %{{.*}} : i32 to i64
+  // CHECK: llvm.mlir.constant(32 : i64)
+  // CHECK: llvm.mul %{{.*}} : i64
+  func.func @log2(%x: !rcgmp.mpz) -> i64 {
+    %v = rcgmp.log2i %x : !rcgmp.mpz to i64
+    return %v : i64
+  }
   // Limbs and tagged offsets follow the handle width: 2^32 + 1 has two 32-bit
   // limbs, and the remainder of at_least 2 subtracts 8 from the tagged bits.
   // CHECK-LABEL: llvm.func @match

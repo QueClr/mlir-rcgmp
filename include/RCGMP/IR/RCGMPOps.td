@@ -405,6 +405,28 @@ def RCGMP_TruncIOverflowOp : RCGMPOp<"trunci_overflow",
   let hasFolder = 1;
 }
 
+def RCGMP_Log2IOp : RCGMPOp<"log2i", [RCGMP_NotSpeculatable]> {
+  let summary = "Compute the base-2 logarithm of a borrowed integer";
+  let description = [{
+    The result is the base-2 logarithm of the absolute value of the integer,
+    rounded down: one less than the number of bits of the magnitude. The
+    logarithm of zero is zero, as for Lean's `Nat.log2`. The operand is
+    borrowed, as by `rcgmp.cmpi`.
+
+    The result is an unsigned integer. A result type too narrow for the
+    logarithm holds its low bits: the logarithm is reduced modulo two to the
+    power of the result width.
+
+    ```mlir
+    %log = rcgmp.log2i %x : !rcgmp.mpz to i64
+    ```
+  }];
+  let arguments = (ins Arg<RCGMP_MpzType, "borrowed integer", [MemRead]>:$value);
+  let results = (outs AnySignlessInteger:$result);
+  let assemblyFormat = "$value attr-dict `:` type($value) `to` type($result)";
+  let hasFolder = 1;
+}
+
 def RCGMP_MatchOp : RCGMPOp<"match", [RCGMP_NotSpeculatable,
     RecursiveMemoryEffects, SingleBlockImplicitTerminator<"YieldOp">,
     DeclareOpInterfaceMethods<RegionBranchOpInterface, ["getSuccessorInputs"]>]> {

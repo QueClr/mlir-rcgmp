@@ -139,6 +139,24 @@ func.func @conversions() -> (!rcgmp.mpz, !rcgmp.mpz, i32, i32, i1, i1, i1) {
   return %u, %s, %low, %v, %o, %eq, %lt : !rcgmp.mpz, !rcgmp.mpz, i32, i32, i1, i1, i1
 }
 
+// Logarithms are of the magnitude, zero for zero, and keep the low bits that
+// fit the result.
+// CHECK-LABEL: func.func @logarithms
+// CHECK-DAG: %[[ZERO:.*]] = arith.constant 0 : i64
+// CHECK-DAG: %[[LOG:.*]] = arith.constant 128 : i64
+// CHECK-DAG: %[[LOW:.*]] = arith.constant 0 : i7
+// CHECK: return %[[ZERO]], %[[LOG]], %[[LOG]], %[[LOW]]
+func.func @logarithms() -> (i64, i64, i64, i7) {
+  %zero = rcgmp.constant 0 : !rcgmp.mpz
+  %big = rcgmp.constant 340282366920938463463374607431768211456 : !rcgmp.mpz
+  %negative = rcgmp.constant -680564733841876926926749214863536422911 : !rcgmp.mpz
+  %a = rcgmp.log2i %zero : !rcgmp.mpz to i64
+  %b = rcgmp.log2i %big : !rcgmp.mpz to i64
+  %c = rcgmp.log2i %negative : !rcgmp.mpz to i64
+  %d = rcgmp.log2i %big : !rcgmp.mpz to i7
+  return %a, %b, %c, %d : i64, i64, i64, i7
+}
+
 // Constants need no reference counting.
 // CHECK-LABEL: func.func @counting
 // CHECK-NOT: rcgmp.retain

@@ -432,6 +432,16 @@ LogicalResult TruncIOverflowOp::fold(FoldAdaptor adaptor,
   return success();
 }
 
+OpFoldResult Log2IOp::fold(FoldAdaptor adaptor) {
+  std::optional<APInt> value = mpzOperand(adaptor.getValue());
+  if (!value)
+    return {};
+  APInt magnitude = value->sext(value->getBitWidth() + 1).abs();
+  std::uint64_t log = magnitude.isZero() ? 0 : magnitude.logBase2();
+  unsigned width = getType().getIntOrFloatBitWidth();
+  return IntegerAttr::get(getType(), APInt(64, log).zextOrTrunc(width));
+}
+
 // Constants need no reference counting.
 LogicalResult RetainOp::canonicalize(RetainOp op, PatternRewriter &rewriter) {
   if (!op.getValue().getDefiningOp<ConstantOp>())

@@ -17,6 +17,6 @@ add_mlir_conversion_library(MLIRRCGMPToSCF
   MatchLowering.cpp
   LINK_LIBS PUBLIC
     MLIRRCGMP MLIRArithDialect MLIRControlFlowDialect MLIRSCFDialect
-    MLIRFuncDialect MLIRMemRefDialect MLIRUBDialect MLIRPass
+    MLIRFuncDialect MLIRMathDialect MLIRMemRefDialect MLIRUBDialect MLIRPass
     MLIRTransformUtils
 )
