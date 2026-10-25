@@ -3,6 +3,7 @@
 #include <llvm/ADT/DenseMap.h>
 #include <llvm/ADT/DenseSet.h>
 #include <llvm/ADT/StringExtras.h>
+#include <llvm/ADT/TypeSwitch.h>
 #include <mlir/IR/Builders.h>
 #include <mlir/IR/Matchers.h>
 #include <mlir/IR/OpImplementation.h>
@@ -813,8 +814,81 @@ static LogicalResult canonicalizeLeanQuotient(Op op,
   return success();
 }
 
+// The roundings of division, each with a quotient, a remainder, and a pair
+// operation.
+enum class DivisionRounding { truncate, floor, euclidean };
+
+static DivisionRounding getRounding(RemSIOp) {
+  return DivisionRounding::truncate;
+}
+static DivisionRounding getRounding(FloorModSIOp) {
+  return DivisionRounding::floor;
+}
+static DivisionRounding getRounding(EModSIOp) {
+  return DivisionRounding::euclidean;
+}
+
+// A quotient and a remainder of the same operands in one block become one Pair
+// operation, which divides once. They must agree on divzero and nonnegative,
+// and round alike, unless both are nonnegative, when every rounding agrees.
+// Each consumed one reference to each operand: the pair consumes those of the
+// earlier one, in its place, and releases consume those of the later one,
+// where it was, so the count of every value is the same at every point. An
+// operation in between that consumes an operand holds a reference of its own
+// besides the later one's, so it finds the operand shared and leaves it
+// unchanged, and the pair divides the values the later one would have.
+// Constant divisors that are zero or powers of two are left to the patterns
+// that replace those divisions, and an exact quotient has no remainder to
+// share.
+template <typename Pair, DivisionRounding rounding, typename Quotient>
+static LogicalResult fuseWithRemainder(Quotient op, PatternRewriter &rewriter) {
+  if (op.getExact())
+    return failure();
+  if (auto divisor = op.getRhs().template getDefiningOp<ConstantOp>()) {
+    APInt value = divisor.getValue();
+    APInt magnitude = value.sext(value.getBitWidth() + 1).abs();
+    if (magnitude.isZero() || magnitude.isPowerOf2())
+      return failure();
+  }
+  Value lhs = op.getLhs(), rhs = op.getRhs();
+  for (Operation *user : lhs.getUsers()) {
+    if (user->getBlock() != op->getBlock())
+      continue;
+    bool fusible =
+        TypeSwitch<Operation *, bool>(user)
+            .Case<RemSIOp, FloorModSIOp, EModSIOp>([&](auto remainder) {
+              return remainder.getLhs() == lhs && remainder.getRhs() == rhs &&
+                     remainder.getDivZero() == op.getDivZero() &&
+                     remainder.getNonnegative() == op.getNonnegative() &&
+                     (op.getNonnegative() ||
+                      getRounding(remainder) == rounding);
+            })
+            .Default(false);
+    if (!fusible)
+      continue;
+    Operation *first = op, *second = user;
+    if (user->isBeforeInBlock(op))
+      std::swap(first, second);
+    rewriter.setInsertionPoint(first);
+    auto pair = Pair::create(
+        rewriter, rewriter.getFusedLoc({op.getLoc(), user->getLoc()}),
+        op.getType(), op.getType(), lhs, rhs, op.getDivZero(),
+        op.getNonnegative());
+    rewriter.setInsertionPoint(second);
+    ReleaseOp::create(rewriter, second->getLoc(), lhs);
+    ReleaseOp::create(rewriter, second->getLoc(), rhs);
+    rewriter.replaceOp(user, pair.getRemainder());
+    rewriter.replaceOp(op, pair.getQuotient());
+    return success();
+  }
+  return failure();
+}
+
 LogicalResult DivSIOp::canonicalize(DivSIOp op, PatternRewriter &rewriter) {
-  return canonicalizeLeanQuotient(op, rewriter);
+  if (succeeded(canonicalizeLeanQuotient(op, rewriter)))
+    return success();
+  return fuseWithRemainder<DivRemSIOp, DivisionRounding::truncate>(op,
+                                                                   rewriter);
 }
 
 // An exact quotient does not depend on its rounding, so a floored or Euclidean
@@ -834,11 +908,17 @@ static LogicalResult canonicalizeRoundedQuotient(Op op,
 
 LogicalResult FloorDivSIOp::canonicalize(FloorDivSIOp op,
                                          PatternRewriter &rewriter) {
-  return canonicalizeRoundedQuotient(op, rewriter);
+  if (succeeded(canonicalizeRoundedQuotient(op, rewriter)))
+    return success();
+  return fuseWithRemainder<FloorDivModSIOp, DivisionRounding::floor>(op,
+                                                                     rewriter);
 }
 
 LogicalResult EDivSIOp::canonicalize(EDivSIOp op, PatternRewriter &rewriter) {
-  return canonicalizeRoundedQuotient(op, rewriter);
+  if (succeeded(canonicalizeRoundedQuotient(op, rewriter)))
+    return success();
+  return fuseWithRemainder<EDivModSIOp, DivisionRounding::euclidean>(op,
+                                                                     rewriter);
 }
 
 LogicalResult ConstantOp::verify() {

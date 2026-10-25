@@ -129,6 +129,7 @@ rcgmp_native_test(gcd)
 rcgmp_native_test(exact-division)
 rcgmp_native_test(fused-chains)
 rcgmp_native_test(zero-remainder -canonicalize)
+rcgmp_native_test(division-pair -canonicalize)
 
 # The differential harness compares each feature, compiled from its own MLIR
 # source, with GMP. It also exercises the comparisons in compare.mlir, the

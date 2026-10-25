@@ -385,6 +385,15 @@ def RCGMP_EModSIOp : RCGMP_DivisionOp<"emodsi", [{
   let hasCanonicalizer = 1;
 }
 
+defvar RCGMP_DivisionPairDescription = [{
+    A quotient and a remainder of the same operands in one block canonicalize
+    to the pair when they agree on `divzero` and `nonnegative`, and round alike
+    or are both `nonnegative`, unless the quotient is `exact` or the divisor a
+    constant zero or power of two. The pair consumes the operands where the
+    earlier of them did, and `rcgmp.release` consumes the references of the
+    later one where it was.
+  }];
+
 class RCGMP_DivisionPairOp<string name, string semantics>
     : RCGMPOp<name, [SameOperandsAndResultType, RCGMP_NotSpeculatable]> {
   let arguments = !con(RCGMP_DivisionArguments, (ins UnitAttr:$nonnegative));
@@ -394,8 +403,8 @@ class RCGMP_DivisionPairOp<string name, string semantics>
     $lhs `,` $rhs (`nonnegative` $nonnegative^)? (`divzero` `` $divZero^)?
     attr-dict `:` type($quotient)
   }];
-  let description =
-      RCGMP_DivisionDescription # semantics # RCGMP_DivZeroDescription;
+  let description = RCGMP_DivisionDescription # semantics #
+                    RCGMP_DivZeroDescription # RCGMP_DivisionPairDescription;
   let hasFolder = 1;
 }
 
