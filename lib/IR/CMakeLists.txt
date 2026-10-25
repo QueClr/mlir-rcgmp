@@ -13,4 +13,5 @@ add_mlir_dialect_library(MLIRRCGMP
     MLIRLLVMDialect
     MLIRInferTypeOpInterface
     MLIRSideEffectInterfaces
+    MLIRTransformUtils
 )
