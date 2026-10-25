@@ -5,6 +5,7 @@ module;
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <initializer_list>
 #include <span>
 #include <utility>
 export module rcgmp.runtime:bitwise;
@@ -51,6 +52,46 @@ constexpr Limb apply(Logic logic, Limb a, Limb b) {
     return a ^ b;
   }
   std::unreachable();
+}
+
+// Applies step to each index below count, in blocks of eight and then in at
+// most one block each of four, two and one, so that compilers vectorize the
+// steps on adjacent limbs. It is inlined into its callers, whose restrict
+// qualifiers vectorization needs.
+template <typename Step>
+[[gnu::always_inline]] inline void forEachLimb(std::size_t count, Step step) {
+  std::size_t i = 0;
+  for (; i + 8 <= count; i += 8)
+    for (std::size_t j = 0; j < 8; ++j)
+      step(i + j);
+  // count - i is count % 8 here, so its bits select the shorter blocks.
+  for (std::size_t width : {4, 2, 1})
+    if (count & width) {
+      for (std::size_t j = 0; j < width; ++j)
+        step(i + j);
+      i += width;
+    }
+}
+
+// Combines count limbs of x and y into out, which overlaps neither. x and y
+// may be the same (x op x), as only out is written. The vectorized loop
+// combines two or more limbs per instruction, where mpn_and_n, mpn_ior_n and
+// mpn_xor_n combine one.
+template <Logic logic>
+void combine(Limb *__restrict out, const Limb *__restrict x,
+             const Limb *__restrict y, std::size_t count) {
+  forEachLimb(count, [&](std::size_t i) { out[i] = apply(logic, x[i], y[i]); });
+}
+
+// The same with x as out, for a result that replaces an operand. combine
+// cannot compute it, as its restrict qualifiers forbid out to be x, and a loop
+// with unrestricted sources would be vectorized only behind a runtime overlap
+// test, which fails when out is a source.
+template <Logic logic>
+void combineInPlace(Limb *__restrict out, const Limb *__restrict y,
+                    std::size_t count) {
+  forEachLimb(count,
+              [&](std::size_t i) { out[i] = apply(logic, out[i], y[i]); });
 }
 
 // The limbs that hold a result. Above its limbs, the two's complement of an
@@ -117,20 +158,15 @@ Handle bitwise(Handle lhs, Handle rhs, Reuse reuse) {
   std::span<Limb> out = result.limbs();
   if (!left.negative && !right.negative) {
     std::size_t common = std::min(left.count(), right.count());
-    if (common) {
-      const Limb *x = left.limbs.data(), *y = right.limbs.data();
-      switch (logic) {
-      case Logic::conjunction:
-        mpn_and_n(out.data(), x, y, common);
-        break;
-      case Logic::disjunction:
-        mpn_ior_n(out.data(), x, y, common);
-        break;
-      case Logic::exclusiveDisjunction:
-        mpn_xor_n(out.data(), x, y, common);
-        break;
-      }
-    }
+    const Limb *x = left.limbs.data(), *y = right.limbs.data();
+    // A reused operand is uniquely owned, so it is not also the other one.
+    // Each operation is commutative.
+    if (out.data() == x)
+      combineInPlace<logic>(out.data(), y, common);
+    else if (out.data() == y)
+      combineInPlace<logic>(out.data(), x, common);
+    else
+      combine<logic>(out.data(), x, y, common);
     if (count > common) {
       const Magnitude &longer = left.count() > right.count() ? left : right;
       if (out.data() != longer.limbs.data())
