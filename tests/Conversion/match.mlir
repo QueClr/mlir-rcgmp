@@ -9,14 +9,16 @@ func.func private @use(!rcgmp.mpz) -> i64
 
 // Each path yields the dispatch index, the region argument, and the results of
 // arms that only yield values known on selection. Immediates are selected by
-// payload and keep their tag after subtracting four times the threshold.
+// their tagged bits, which order them as their payloads do, without decoding
+// the payload, and keep their tag after subtracting four times the threshold.
 // Negative heap integers have no arm, so they take the arm of their neighbors.
 // CHECK-LABEL: func.func @successor
 // CHECK-SAME: (%[[N:.*]]: !rcgmp.mpz, %[[A:.*]]: i64)
 // CHECK: %[[BITS:.*]] = rcgmp.bridge.mpz.to_bits %[[N]] : !rcgmp.mpz to i64
 // CHECK: %[[SELECTED:.*]]:3 = scf.if %{{.*}} -> (index, !rcgmp.mpz, i64) {
-// CHECK: %[[PAYLOAD:.*]] = arith.shrsi %[[BITS]]
-// CHECK: arith.cmpi slt, %[[PAYLOAD]]
+// CHECK-NOT: arith.shrsi
+// CHECK: %[[FIVE:.*]] = arith.constant 5 : i64
+// CHECK: arith.cmpi slt, %[[BITS]], %[[FIVE]]
 // CHECK: scf.yield %{{.*}}, %{{.*}}, %[[A]] : index, i64, i64
 // CHECK: ub.poison : i64
 // CHECK: %[[TAGGED:.*]] = arith.subi %[[BITS]], %{{.*}}#1 : i64
@@ -44,17 +46,19 @@ func.func @successor(%n: !rcgmp.mpz, %a: i64) -> i64 {
   return %r : i64
 }
 
-// Close boundaries clamp the payload into a table. Arms yielding integer
-// constants become rows of the narrowest integers holding them, and since no
-// arm needs a region, there is no dispatch after selection.
+// Close boundaries clamp the tagged bits into a table, indexed by their
+// offset in steps of four. Arms yielding integer constants become rows of the
+// narrowest integers holding them, and since no arm needs a region, there is
+// no dispatch after selection.
 // CHECK-LABEL: func.func @table
-// CHECK: %[[PAYLOAD:.*]] = arith.shrsi
-// CHECK: %[[LOW:.*]] = arith.constant -1 : i64
-// CHECK: %[[HIGH:.*]] = arith.constant 4 : i64
-// CHECK: %[[MIN:.*]] = arith.minsi %[[PAYLOAD]], %[[HIGH]]
+// CHECK: %[[BITS:.*]] = rcgmp.bridge.mpz.to_bits
+// CHECK: %[[LOW:.*]] = arith.constant -3 : i64
+// CHECK: %[[HIGH:.*]] = arith.constant 17 : i64
+// CHECK: %[[MIN:.*]] = arith.minsi %[[BITS]], %[[HIGH]]
 // CHECK: %[[CLAMPED:.*]] = arith.maxsi %[[MIN]], %[[LOW]]
 // CHECK: %[[OFFSET:.*]] = arith.subi %[[CLAMPED]], %[[LOW]]
-// CHECK: %[[INDEX:.*]] = arith.index_castui %[[OFFSET]]
+// CHECK: %[[STEPS:.*]] = arith.shrui %[[OFFSET]], %{{.*}} : i64
+// CHECK: %[[INDEX:.*]] = arith.index_castui %[[STEPS]]
 // CHECK: %[[BASE:.*]] = memref.get_global @[[TABLE]]
 // CHECK: %[[ENTRY:.*]] = memref.load %[[BASE]][%[[INDEX]], %{{.*}}]
 // CHECK: arith.extsi %[[ENTRY]] : i8 to i64
@@ -89,14 +93,14 @@ func.func @table(%n: !rcgmp.mpz) -> i64 {
 // which stores the key and the results; a mismatching key selects the other
 // arm.
 // CHECK-LABEL: func.func @hashed
-// CHECK: %[[PAYLOAD:.*]] = arith.shrsi
-// CHECK: %[[PRODUCT:.*]] = arith.muli %[[PAYLOAD]], %{{.*}} : i64
+// CHECK: %[[BITS:.*]] = rcgmp.bridge.mpz.to_bits
+// CHECK: %[[PRODUCT:.*]] = arith.muli %[[BITS]], %{{.*}} : i64
 // CHECK: %[[SLOT:.*]] = arith.shrui %[[PRODUCT]], %{{.*}} : i64
 // CHECK: %[[INDEX:.*]] = arith.index_castui %[[SLOT]]
 // CHECK: memref.get_global @[[SLOTS]]
 // CHECK: %[[KEY:.*]] = memref.load %{{.*}}[%[[INDEX]], %{{.*}}]
 // CHECK: %[[VALUE:.*]] = memref.load %{{.*}}[%[[INDEX]], %{{.*}}]
-// CHECK: %[[HIT:.*]] = arith.cmpi eq, %[[KEY]], %[[PAYLOAD]]
+// CHECK: %[[HIT:.*]] = arith.cmpi eq, %[[KEY]], %[[BITS]]
 // CHECK: arith.select %[[HIT]], %[[VALUE]], %{{.*}} : i64
 func.func @hashed(%n: !rcgmp.mpz) -> i64 {
   %r = rcgmp.match %n : !rcgmp.mpz -> i64 {
@@ -135,9 +139,10 @@ func.func @hashed(%n: !rcgmp.mpz) -> i64 {
 // A few points over one arm are compared for equality. Every heap integer
 // selects the default, so the heap path reads nothing.
 // CHECK-LABEL: func.func @points
-// CHECK: %[[PAYLOAD:.*]] = arith.shrsi
-// CHECK: arith.cmpi eq, %[[PAYLOAD]], %{{.*}}
-// CHECK: arith.cmpi eq, %[[PAYLOAD]], %{{.*}}
+// CHECK: %[[BITS:.*]] = rcgmp.bridge.mpz.to_bits
+// CHECK-NOT: arith.shrsi
+// CHECK: arith.cmpi eq, %[[BITS]], %{{.*}}
+// CHECK: arith.cmpi eq, %[[BITS]], %{{.*}}
 // CHECK: } else {
 // CHECK-NOT: rcgmp.bridge.mpz.size
 // CHECK: return

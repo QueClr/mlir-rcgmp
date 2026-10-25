@@ -104,17 +104,18 @@ public:
   }
 
   // Selects the leaf of the piece holding key, which must not be below the
-  // first piece's start.
+  // first piece's start. Keys and starts step by stride, a power of two: the
+  // key is never strictly between two values a stride apart.
   Values dispatch(Value key, bool isSigned, ArrayRef<Piece> pieces,
-                  LeafBuilder leaf) {
+                  LeafBuilder leaf, unsigned stride = 1) {
     if (pieces.size() == 1)
       return leaf(pieces.front().leaf);
-    bool points = isPointSet(pieces);
+    bool points = isPointSet(pieces, stride);
     if (points && pieces.size() / 2 <= maxPointChain)
       return pointChain(key, pieces, leaf);
     APInt low = pieces[1].start, high = pieces.back().start;
-    if (pieces.size() > 3 && (high - low).ult(maxWindow))
-      return window(key, isSigned, pieces, leaf);
+    if (pieces.size() > 3 && (high - low).udiv(stride).ult(maxWindow))
+      return window(key, isSigned, pieces, leaf, stride);
     if (points)
       if (std::optional<Values> hashed = perfectHash(key, pieces))
         return *hashed;
@@ -126,20 +127,22 @@ public:
     return branch(
         below,
         [&] {
-          return dispatch(key, isSigned, pieces.take_front(middle), leaf);
+          return dispatch(key, isSigned, pieces.take_front(middle), leaf,
+                          stride);
         },
         [&] {
-          return dispatch(key, isSigned, pieces.drop_front(middle), leaf);
+          return dispatch(key, isSigned, pieces.drop_front(middle), leaf,
+                          stride);
         });
   }
 
 private:
   // Single keys between pieces of one leaf.
-  static bool isPointSet(ArrayRef<Piece> pieces) {
+  static bool isPointSet(ArrayRef<Piece> pieces, unsigned stride) {
     if (pieces.size() % 2 == 0)
       return false;
     for (size_t i = 1; i < pieces.size(); i += 2)
-      if (pieces[i + 1].start != pieces[i].start + 1 ||
+      if (pieces[i + 1].start != pieces[i].start + stride ||
           pieces[i + 1].leaf != pieces.front().leaf)
         return false;
     return true;
@@ -156,13 +159,13 @@ private:
         [&] { return pointChain(key, pieces.drop_front(2), leaf); });
   }
 
-  // Clamps the key to one below the first interior boundary and the last one,
-  // and switches on its offset. Every leaf other than the most frequent one has
-  // its own cases.
+  // Clamps the key to one stride below the first interior boundary and the
+  // last one, and switches on its offset in strides. Every leaf other than the
+  // most frequent one has its own cases.
   Values window(Value key, bool isSigned, ArrayRef<Piece> pieces,
-                LeafBuilder leaf) {
+                LeafBuilder leaf, unsigned stride) {
     Type type = key.getType();
-    APInt base = pieces[1].start - 1, high = pieces.back().start;
+    APInt base = pieces[1].start - stride, high = pieces.back().start;
     Value lowest = integerConstant(rewriter, loc, type, base);
     Value highest = integerConstant(rewriter, loc, type, high);
     Value clamped;
@@ -175,13 +178,18 @@ private:
           rewriter, loc, arith::MinUIOp::create(rewriter, loc, key, highest),
           lowest);
     Value offset = arith::SubIOp::create(rewriter, loc, clamped, lowest);
+    if (stride > 1)
+      offset = arith::ShRUIOp::create(
+          rewriter, loc, offset,
+          integerConstant(rewriter, loc, type,
+                          APInt(base.getBitWidth(), llvm::Log2_32(stride))));
     Value index = arith::IndexCastUIOp::create(rewriter, loc,
                                                rewriter.getIndexType(), offset);
-    uint64_t entries = (high - base).getZExtValue() + 1;
+    uint64_t entries = (high - base).udiv(stride).getZExtValue() + 1;
     SmallVector<unsigned> table;
     const Piece *piece = pieces.begin();
     for (uint64_t entry = 0; entry < entries; ++entry) {
-      APInt value = base + entry;
+      APInt value = base + entry * stride;
       while (std::next(piece) != pieces.end() &&
              (isSigned ? std::next(piece)->start.sle(value)
                        : std::next(piece)->start.ule(value)))
@@ -913,7 +921,9 @@ private:
     return values;
   }
 
-  // Selects among immediates by their payload. Each leaf yields the dispatch
+  // Selects among immediates by their tagged bits 4 * n + 1, which order
+  // immediates as their payloads n do. Comparing the bits leaves decoding the
+  // payload to the operations that use it. Each leaf yields the dispatch
   // index, the offset and flip that turn the tagged bits into the region
   // argument, and the results of a constant arm.
   Values selectImmediate(ArrayRef<MatchInterval> intervals, Value bits) {
@@ -921,12 +931,7 @@ private:
     APInt maximum = APInt::getSignedMaxValue(width).ashr(2);
     SmallVector<Piece> pieces;
     for (auto [start, arm] : clip(intervals, minimum, maximum))
-      pieces.push_back({start.trunc(width), arm});
-    Value payload;
-    if (pieces.size() > 1) {
-      auto two = arith::ConstantIntOp::create(rewriter, loc, 2, width);
-      payload = arith::ShRSIOp::create(rewriter, loc, bits, two);
-    }
+      pieces.push_back({start.trunc(width).shl(2) | 1, arm});
     SmallVector<Type> types{rewriter.getIndexType(), word};
     if (hasDeficit)
       types.push_back(word);
@@ -935,7 +940,8 @@ private:
     Selector selector(rewriter, loc, types,
                       [this](unsigned arm) { return knownImmediateLeaf(arm); });
     Values selected = selector.dispatch(
-        payload, /*isSigned=*/true, pieces, [&](unsigned arm) -> Values {
+        bits, /*isSigned=*/true, pieces,
+        [&](unsigned arm) -> Values {
           Values leaf{
               arith::ConstantIndexOp::create(rewriter, loc, dispatchIndex[arm]),
               integerConstant(rewriter, loc, word, offset(arm))};
@@ -943,7 +949,8 @@ private:
             leaf.push_back(integerConstant(rewriter, loc, word, flip(arm)));
           llvm::append_range(leaf, results(arm));
           return leaf;
-        });
+        },
+        /*stride=*/4);
     if (hasDeficit)
       bits = arith::XOrIOp::create(rewriter, loc, bits, selected[2]);
     Value bound = arith::SubIOp::create(rewriter, loc, bits, selected[1]);
