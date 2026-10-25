@@ -14,6 +14,7 @@ set(RCGMP_OPT_LIBS
   MLIRConvertToLLVMPass
   MLIRDLTIDialect
   MLIRFuncDialect
+  MLIRFuncInlinerExtension
   MLIRFuncToLLVM
   MLIROptLib
 )

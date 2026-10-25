@@ -14,6 +14,7 @@
 #include <mlir/Dialect/Arith/IR/Arith.h>
 #include <mlir/Dialect/ControlFlow/IR/ControlFlowOps.h>
 #include <mlir/Dialect/DLTI/DLTI.h>
+#include <mlir/Dialect/Func/Extensions/InlinerExtension.h>
 #include <mlir/Dialect/Func/IR/FuncOps.h>
 #include <mlir/Dialect/LLVMIR/LLVMDialect.h>
 #include <mlir/Dialect/Math/IR/Math.h>
@@ -38,6 +39,7 @@ int main(int argc, char **argv) {
                   mlir::arith::ArithDialect, mlir::scf::SCFDialect,
                   mlir::LLVM::LLVMDialect, mlir::math::MathDialect,
                   mlir::memref::MemRefDialect, mlir::ub::UBDialect>();
+  mlir::func::registerInlinerExtension(registry);
   mlir::rcgmp::registerConvertRCGMPToLLVMInterface(registry);
   mlir::registerConvertFuncToLLVMInterface(registry);
   mlir::cf::registerConvertControlFlowToLLVMInterface(registry);
@@ -50,6 +52,7 @@ int main(int argc, char **argv) {
   mlir::registerPass([] { return mlir::createReconcileUnrealizedCastsPass(); });
   mlir::registerPass([] { return mlir::createCanonicalizerPass(); });
   mlir::registerPass([] { return mlir::createCSEPass(); });
+  mlir::registerPass([] { return mlir::createInlinerPass(); });
   mlir::registerPass([] { return mlir::createConvertToLLVMPass(); });
 #ifdef RCGMP_INCLUDE_TESTS
   mlir::rcgmp::test::registerTestPasses();

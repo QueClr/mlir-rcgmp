@@ -7,6 +7,7 @@
 #include <mlir/Dialect/Arith/IR/Arith.h>
 #include <mlir/Dialect/LLVMIR/LLVMDialect.h>
 #include <mlir/IR/DialectImplementation.h>
+#include <mlir/Transforms/InliningUtils.h>
 
 #define GET_TYPEDEF_CLASSES
 #include "RCGMP/IR/RCGMPTypes.cpp.inc"
@@ -17,6 +18,24 @@
 #include "RCGMP/IR/RCGMPDialect.cpp.inc"
 
 namespace mlir::rcgmp {
+
+namespace {
+// Every rcgmp operation may be inlined. Ownership travels with SSA values,
+// which inlining preserves, and no operation refers to its enclosing function
+// or a symbol. The regions of rcgmp.match end in rcgmp.yield, which returns
+// from the match alone, so they need no terminator handling.
+struct RCGMPInlinerInterface : DialectInlinerInterface {
+  using DialectInlinerInterface::DialectInlinerInterface;
+
+  bool isLegalToInline(Operation *, Region *, bool, IRMapping &) const final {
+    return true;
+  }
+
+  bool isLegalToInline(Region *, Region *, bool, IRMapping &) const final {
+    return true;
+  }
+};
+} // namespace
 
 void RCGMPDialect::initialize() {
   addOperations<
@@ -35,6 +54,7 @@ void RCGMPDialect::initialize() {
 #define GET_ATTRDEF_LIST
 #include "RCGMP/IR/RCGMPAttrs.cpp.inc"
       >();
+  addInterfaces<RCGMPInlinerInterface>();
 }
 
 Operation *RCGMPDialect::materializeConstant(OpBuilder &builder,
