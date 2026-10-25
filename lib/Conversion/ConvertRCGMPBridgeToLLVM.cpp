@@ -326,6 +326,19 @@ struct FreeLowering : OpConversionPattern<MpzFreeOp> {
   }
 };
 
+struct ExpectLowering : OpConversionPattern<ExpectOp> {
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(ExpectOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto expected = integerConstant(rewriter, op.getLoc(), rewriter.getI1Type(),
+                                    op.getExpected());
+    rewriter.replaceOpWithNewOp<LLVM::ExpectOp>(op, adaptor.getValue(),
+                                                expected);
+    return success();
+  }
+};
+
 struct ToBitsLowering : OpConversionPattern<MpzToBitsOp> {
   using OpConversionPattern::OpConversionPattern;
   LogicalResult
@@ -433,9 +446,9 @@ void populateRCGMPBridgeToLLVMConversionPatterns(LLVMTypeConverter &converter,
       SignedOverflowLowering<MulSIOverflowOp, LLVM::SMulWithOverflowOp>,
       IsImmediateLowering, FitsImmediateLowering, FromImmediateLowering,
       PromoteLowering, ImmortalLowering, RefCountLowering<MpzIncRefOp, true>,
-      RefCountLowering<MpzDecRefOp, false>, FreeLowering, ToBitsLowering,
-      FromBitsLowering, IsUniqueLowering, IsImmortalLowering, SizeLowering,
-      LimbLowering>(converter, patterns.getContext());
+      RefCountLowering<MpzDecRefOp, false>, FreeLowering, ExpectLowering,
+      ToBitsLowering, FromBitsLowering, IsUniqueLowering, IsImmortalLowering,
+      SizeLowering, LimbLowering>(converter, patterns.getContext());
 }
 
 } // namespace mlir::rcgmp

@@ -18,6 +18,17 @@ struct FastPath {
   Value valid;
 };
 
+// A unit attribute on an operation that lowers to the runtime call alone,
+// without its fast path or a slow path that assumes the fast path failed.
+inline constexpr StringLiteral runtimeOnlyAttrName = "rcgmp.runtime_only";
+
+// Marks valid as usually true, so that code generation lays out the fast path
+// as the fall-through and keeps the runtime call out of its way.
+inline Value expectFast(PatternRewriter &rewriter, Location loc, Value valid) {
+  return bridge::ExpectOp::create(rewriter, loc, valid,
+                                  rewriter.getBoolAttr(true));
+}
+
 // Lowers an operation with at least one mpz operand into an inline fast path
 // and a runtime call taken when the fast path is not valid.
 //
@@ -28,12 +39,14 @@ struct FastPath {
 //   mode so that atomic and nonatomic source signatures stay distinct;
 // - buildFastPath(rewriter, loc, op, operands), where operands are the
 //   operation's operands with each mpz operand replaced by its handle bits
-//   and each other one converted by buildRuntimeOperand. The fast path must be
-//   safe to evaluate on any live handle. For an mpz result, valid must imply
-//   that the result bits form an immediate, since the fast path creates no
-//   reference. When the operation consumes its mpz operands, valid must also
-//   imply that every mpz operand is immediate, since the fast path drops them
-//   without a release.
+//   and each other one converted by buildRuntimeOperand. In a fused chain, an
+//   operand produced by the chain is instead the fast-path result bits, which
+//   are immediate whenever the chain is valid, and allImmediate skips them. The
+//   fast path must be safe to evaluate on any live handle. For an mpz result,
+//   valid must imply that the result bits form an immediate, since the fast
+//   path creates no reference. When the operation consumes its mpz operands,
+//   valid must also imply that every mpz operand is immediate, since the fast
+//   path drops them without a release.
 //
 // The runtime receives the mpz operands as they are and the others as
 // buildRuntimeOperand converts them. When the operation consumes its mpz
@@ -149,20 +162,37 @@ template <typename Derived> struct FastPathLowering : RewritePattern {
       return rewriter.notifyMatchFailure(op,
                                          "incompatible runtime declaration");
 
-    SmallVector<Value> handles, operands;
-    for (Value operand : arguments) {
-      if (!isa<MpzType>(operand.getType())) {
-        operands.push_back(operand);
-        continue;
-      }
-      handles.push_back(operand);
-      operands.push_back(
-          bridge::MpzToBitsOp::create(rewriter, loc, word, operand));
+    auto handles = llvm::filter_to_vector(
+        arguments, [](Value value) { return isa<MpzType>(value.getType()); });
+    // The reuse mask is built where the runtime is called, which a slow path
+    // may do in only some of its branches.
+    auto call = [&] {
+      SmallVector<Value> callArguments(arguments);
+      if (passReuse)
+        callArguments.push_back(reuseMask(rewriter, loc, handles));
+      return func::CallOp::create(rewriter, loc, *function, callArguments);
+    };
+    if (op->hasAttr(runtimeOnlyAttrName)) {
+      SmallVector<Value> results;
+      if (single)
+        results.push_back(
+            Derived::buildSlowResult(rewriter, loc, op, call().getResult(0)));
+      else
+        llvm::append_range(results, call().getResults());
+      rewriter.replaceOp(op, results);
+      return success();
     }
+
+    SmallVector<Value> operands;
+    for (Value operand : arguments)
+      operands.push_back(
+          isa<MpzType>(operand.getType())
+              ? bridge::MpzToBitsOp::create(rewriter, loc, word, operand)
+              : operand);
     FastPath fast = Derived::buildFastPath(rewriter, loc, op, operands);
-    auto branch =
-        scf::IfOp::create(rewriter, loc, op->getResultTypes(), fast.valid,
-                          /*withElseRegion=*/true);
+    auto branch = scf::IfOp::create(rewriter, loc, op->getResultTypes(),
+                                    expectFast(rewriter, loc, fast.valid),
+                                    /*withElseRegion=*/true);
     rewriter.setInsertionPointToStart(&branch.getThenRegion().front());
     SmallVector<Value> immediates;
     for (auto [value, resultType] :
@@ -174,14 +204,6 @@ template <typename Derived> struct FastPathLowering : RewritePattern {
     scf::YieldOp::create(rewriter, loc, immediates);
 
     rewriter.setInsertionPointToStart(&branch.getElseRegion().front());
-    // The reuse mask is built where the runtime is called, which a slow path
-    // may do in only some of its branches.
-    auto call = [&] {
-      SmallVector<Value> callArguments(arguments);
-      if (passReuse)
-        callArguments.push_back(reuseMask(rewriter, loc, handles));
-      return func::CallOp::create(rewriter, loc, *function, callArguments);
-    };
     if (single)
       scf::YieldOp::create(rewriter, loc,
                            Derived::buildSlowPath(rewriter, loc, op, [&] {
@@ -194,17 +216,34 @@ template <typename Derived> struct FastPathLowering : RewritePattern {
   }
 
 protected:
-  // Tests the immediate tag of every handle in bits.
-  static Value allImmediate(PatternRewriter &rewriter, Location loc,
-                            ValueRange bits) {
-    Value common = bits.front();
-    for (Value value : bits.drop_front())
-      common = arith::AndIOp::create(rewriter, loc, common, value);
+  // Whether bits were read from a handle, which may be a heap handle. Other
+  // operand bits are results of earlier fast paths in a fused chain, which are
+  // immediate whenever the chain is valid.
+  static bool isReadFromHandle(Value bits) {
+    return isa_and_present<bridge::MpzToBitsOp>(bits.getDefiningOp());
+  }
+
+  // Tests the low tag bit of bits.
+  static Value hasImmediateTag(PatternRewriter &rewriter, Location loc,
+                               Value bits) {
     auto one = arith::ConstantIntOp::create(
-        rewriter, loc, 1, cast<IntegerType>(common.getType()).getWidth());
-    auto tag = arith::AndIOp::create(rewriter, loc, common, one);
+        rewriter, loc, 1, cast<IntegerType>(bits.getType()).getWidth());
+    auto tag = arith::AndIOp::create(rewriter, loc, bits, one);
     return arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::eq, tag,
                                  one);
+  }
+
+  // Tests the immediate tag of every handle in bits that is read from a
+  // handle.
+  static Value allImmediate(PatternRewriter &rewriter, Location loc,
+                            ValueRange bits) {
+    auto handles = llvm::filter_to_vector(bits, isReadFromHandle);
+    if (handles.empty())
+      return arith::ConstantIntOp::create(rewriter, loc, 1, 1);
+    Value common = handles.front();
+    for (Value value : ArrayRef(handles).drop_front())
+      common = arith::AndIOp::create(rewriter, loc, common, value);
+    return hasImmediateTag(rewriter, loc, common);
   }
 
 private:

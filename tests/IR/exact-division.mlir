@@ -60,13 +60,13 @@ func.func @unfolded() -> (!rcgmp.mpz, !rcgmp.mpz, !rcgmp.mpz) {
 }
 
 // Floored and Euclidean exact quotients become truncated ones, keeping the
-// zero-divisor mode. A lean exact quotient by zero is zero, and lhs is
-// released.
+// zero-divisor mode and nonnegative. A lean exact quotient by zero is zero,
+// and lhs is released.
 // CHECK-LABEL: func.func @canonicalize
 // CHECK-SAME: (%[[X:.*]]: !rcgmp.mpz, %[[Y:.*]]: !rcgmp.mpz, %[[Z:.*]]: !rcgmp.mpz)
 // CHECK-DAG: %[[ZERO:.*]] = rcgmp.constant 0 : !rcgmp.mpz
 // CHECK-DAG: %[[F:.*]] = rcgmp.divsi %[[X]], %[[Y]] exact divzero<lean> : !rcgmp.mpz
-// CHECK-DAG: %[[E:.*]] = rcgmp.divsi %[[F]], %[[Y]] exact divzero<undefined> : !rcgmp.mpz
+// CHECK-DAG: %[[E:.*]] = rcgmp.divsi %[[F]], %[[Y]] exact nonnegative divzero<undefined> : !rcgmp.mpz
 // CHECK-DAG: rcgmp.release %[[Z]] : !rcgmp.mpz
 // CHECK-NOT: floordivsi
 // CHECK-NOT: edivsi
@@ -75,7 +75,7 @@ func.func @canonicalize(%x: !rcgmp.mpz, %y: !rcgmp.mpz, %z: !rcgmp.mpz) -> (!rcg
   %zero = rcgmp.constant 0 : !rcgmp.mpz
   rcgmp.retain %y : !rcgmp.mpz
   %f = rcgmp.floordivsi %x, %y exact divzero<lean> : !rcgmp.mpz
-  %e = rcgmp.edivsi %f, %y exact divzero<undefined> : !rcgmp.mpz
+  %e = rcgmp.edivsi %f, %y exact nonnegative divzero<undefined> : !rcgmp.mpz
   %l = rcgmp.edivsi %z, %zero exact divzero<lean> : !rcgmp.mpz
   return %e, %l : !rcgmp.mpz, !rcgmp.mpz
 }

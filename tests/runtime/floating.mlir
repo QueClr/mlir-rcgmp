@@ -41,7 +41,8 @@ func.func @sitofp_f32_atomic(%x: !rcgmp.mpz<atomic>) -> f32 {
 // SCF: %[[BOUND:.*]] = arith.constant 2.305843009213694E+18 : f64
 // SCF: %[[ABS:.*]] = math.absf %[[F:.*]] : f64
 // SCF: %[[SMALL:.*]] = arith.cmpf olt, %[[ABS]], %[[BOUND]] : f64
-// SCF: scf.if %[[SMALL]] -> (!rcgmp.mpz) {
+// SCF: %[[LIKELY:.*]] = rcgmp.bridge.expect %[[SMALL]], true
+// SCF: scf.if %[[LIKELY]] -> (!rcgmp.mpz) {
 // SCF: %[[INT:.*]] = arith.fptosi %[[F]] : f64 to i64
 // SCF: rcgmp.bridge.mpz.from_bits
 // SCF: } else {

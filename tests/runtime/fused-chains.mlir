@@ -4,14 +4,23 @@
 // operation's is; the slow path performs the operations one by one.
 
 // The product and the sum are computed together, and one branch selects them.
+// The product by a constant takes a range test, which also keeps the sum
+// immediate, so the sum takes no test. The slow path calls the runtime alone.
 // SCF-LABEL: func.func @collatz_step
 // SCF: %[[X:.*]] = rcgmp.bridge.mpz.to_bits %arg0
-// SCF: rcgmp.bridge.mulsi_overflow
-// SCF: rcgmp.bridge.addsi_extended
-// SCF: scf.if %{{.*}} -> (!rcgmp.mpz) {
-// SCF: rcgmp.bridge.mpz.from_bits
+// SCF: arith.shrsi %[[X]]
+// SCF: arith.cmpi ule
+// SCF: %[[SCALED:.*]] = arith.muli %[[X]]
+// SCF: %[[PRODUCT:.*]] = arith.subi %[[SCALED]]
+// SCF-NOT: rcgmp.bridge.addsi_extended
+// SCF: %[[SUM:.*]] = arith.addi %[[PRODUCT]]
+// SCF: %[[LIKELY:.*]] = rcgmp.bridge.expect %{{.*}}, true
+// SCF: scf.if %[[LIKELY]] -> (!rcgmp.mpz) {
+// SCF: rcgmp.bridge.mpz.from_bits %[[SUM]]
 // SCF: } else {
+// SCF-NOT: arith.muli
 // SCF: func.call @rcgmp_mpz_mul
+// SCF-NOT: rcgmp.bridge.addsi_extended
 // SCF: func.call @rcgmp_mpz_add
 func.func @collatz_step(%x: !rcgmp.mpz) -> !rcgmp.mpz {
   %three = rcgmp.constant 3 : !rcgmp.mpz
@@ -55,4 +64,18 @@ func.func @polynomial_atomic(%x: !rcgmp.mpz<atomic>, %y: !rcgmp.mpz<atomic>) -> 
   %c1 = arith.constant 1 : i64
   %q = rcgmp.shrsi %d, %c1 : !rcgmp.mpz<atomic>, i64
   return %q : !rcgmp.mpz<atomic>
+}
+
+// A negative factor bounds the product too, but not enough to keep the sum
+// immediate, which is then tested.
+// SCF-LABEL: func.func @affine_negative
+// SCF: arith.cmpi ule
+// SCF: arith.muli
+// SCF: rcgmp.bridge.addsi_extended
+func.func @affine_negative(%x: !rcgmp.mpz) -> !rcgmp.mpz {
+  %factor = rcgmp.constant -5 : !rcgmp.mpz
+  %seven = rcgmp.constant 7 : !rcgmp.mpz
+  %t = rcgmp.muli %factor, %x : !rcgmp.mpz
+  %r = rcgmp.addi %t, %seven : !rcgmp.mpz
+  return %r : !rcgmp.mpz
 }

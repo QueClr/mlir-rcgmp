@@ -35,6 +35,10 @@ RCGMP_ENTRY(rcgmp_mpz_qr, edivmodsi)
 void *divsi_undefined(void *, void *);
 rcgmp_mpz_qr edivmodsi_by_8(void *);
 rcgmp_mpz_qr edivmodsi_by_minus_8(void *);
+rcgmp_mpz_qr divremsi_nonnegative(void *, void *);
+rcgmp_mpz_qr divremsi_nonnegative_lean(void *, void *);
+rcgmp_mpz_qr edivmodsi_nonnegative(void *, void *);
+void *remsi_nonnegative_by_prime(void *);
 }
 
 namespace {
@@ -169,6 +173,41 @@ TEST_P(DivisionTest, MatchesGmpOnBoundaries) {
            values, values, std::array{false, true}, std::array{false, true}))
     if (rhs.sign() || lean)
       checkDivision(rounding, lhs, rhs, counting, shared, lean);
+}
+
+// Nonnegative operands, immediate or not, with lean divisions by zero.
+TEST(Division, NonnegativeMatchesGmp) {
+  AllocationCounter allocations;
+  auto values = boundaryValues();
+  std::erase_if(values, [](const Integer &value) { return value.sign() < 0; });
+  auto check = [](rcgmp_mpz_qr result, const Integer &quotient,
+                  const Integer &remainder) {
+    EXPECT_THAT(result.quotient, Represents(quotient));
+    EXPECT_THAT(result.remainder, Represents(remainder));
+    rcgmp_mpz_release(result.quotient, 0);
+    rcgmp_mpz_release(result.remainder, 0);
+  };
+  for (const auto &[lhs, rhs] : std::views::cartesian_product(values, values)) {
+    SCOPED_TRACE(lhs.hex() + " / " + rhs.hex());
+    Integer quotient, remainder = lhs;
+    if (rhs.sign()) {
+      mpz_tdiv_qr(quotient, remainder, lhs, rhs);
+      check(divremsi_nonnegative(toRuntime(lhs), toRuntime(rhs)), quotient,
+            remainder);
+      check(edivmodsi_nonnegative(toRuntime(lhs), toRuntime(rhs)), quotient,
+            remainder);
+    }
+    check(divremsi_nonnegative_lean(toRuntime(lhs), toRuntime(rhs)), quotient,
+          remainder);
+  }
+  for (const Integer &lhs : values) {
+    Integer remainder;
+    mpz_tdiv_r(remainder, lhs, Integer(1000000007));
+    void *result = remsi_nonnegative_by_prime(toRuntime(lhs));
+    EXPECT_THAT(result, Represents(remainder)) << lhs;
+    rcgmp_mpz_release(result, 0);
+  }
+  EXPECT_TRUE(allocations.balanced());
 }
 
 // A lean remainder by zero takes over the reference to lhs, and a lean

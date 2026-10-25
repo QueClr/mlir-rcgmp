@@ -828,7 +828,7 @@ static LogicalResult canonicalizeRoundedQuotient(Op op,
     return failure();
   rewriter.replaceOpWithNewOp<DivSIOp>(op, op.getType(), op.getLhs(),
                                        op.getRhs(), op.getDivZero(),
-                                       /*exact=*/true);
+                                       /*exact=*/true, op.getNonnegative());
   return success();
 }
 

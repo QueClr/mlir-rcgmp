@@ -57,6 +57,18 @@ def RCGMP_MulSIOverflowOp : RCGMPBridgeOp<"mulsi_overflow", [Pure, Commutative,
   let assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($product) `,` type($overflow)";
 }
 
+def RCGMP_ExpectOp : RCGMPBridgeOp<"expect", [Pure]> {
+  let summary = "Hint the likely value of a condition";
+  let description = [{
+    The result is the operand. It tells code generation that the operand
+    usually equals `expected`, so that branches on the result lay out that case
+    as the fall-through path. It lowers to `llvm.intr.expect`.
+  }];
+  let arguments = (ins I1:$value, BoolAttr:$expected);
+  let results = (outs I1:$result);
+  let assemblyFormat = "$value `,` $expected attr-dict";
+}
+
 // mpz representation and reference-count primitives.
 def RCGMP_MpzIsImmediateOp : RCGMPBridgeOp<"mpz.is_immediate", [Pure]> {
   let summary = "Test the immediate tag without accessing memory";

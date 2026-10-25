@@ -33,9 +33,9 @@ struct ExtendLowering : OpRewritePattern<ExtendOp> {
     auto loc = op.getLoc();
     auto fits = bridge::MpzFitsImmediateOp::create(rewriter, loc, op.getValue(),
                                                    isUnsigned);
-    auto result =
-        scf::IfOp::create(rewriter, loc, TypeRange{op.getType()}, fits,
-                          /*withElseRegion=*/true);
+    auto result = scf::IfOp::create(rewriter, loc, TypeRange{op.getType()},
+                                    expectFast(rewriter, loc, fits),
+                                    /*withElseRegion=*/true);
     rewriter.setInsertionPointToStart(&result.getThenRegion().front());
     auto immediate = bridge::MpzFromImmediateOp::create(
         rewriter, loc, op.getType(), op.getValue(), isUnsigned);
@@ -131,6 +131,50 @@ struct ReleaseLowering : OpRewritePattern<ReleaseOp> {
   }
 };
 
+// The value of op's operand index when it is a constant that fits the
+// immediate range of width-bit handles, sign-extended to width bits.
+std::optional<APInt> getImmediateOperand(Operation *op, unsigned index,
+                                         unsigned width) {
+  auto constant = op->getOperand(index).getDefiningOp<ConstantOp>();
+  if (!constant || !bridge::fitsImmediate(constant.getValue(), width))
+    return std::nullopt;
+  return constant.getValue().sextOrTrunc(width);
+}
+
+// The least and greatest x for which factor * x is immediate, for a nonzero
+// factor and width-bit handles.
+std::pair<APInt, APInt> getFactorRange(const APInt &factor, unsigned width) {
+  APInt minimum = APInt::getSignedMinValue(width).ashr(2);
+  APInt maximum = APInt::getSignedMaxValue(width).ashr(2);
+  if (factor.isNegative())
+    std::swap(minimum, maximum);
+  return {llvm::APIntOps::RoundingSDiv(minimum, factor, APInt::Rounding::UP),
+          llvm::APIntOps::RoundingSDiv(maximum, factor, APInt::Rounding::DOWN)};
+}
+
+// Bounds on the value of an immediate result of rcgmp.muli by a constant: a
+// multiple of the factor in the immediate range. A fused chain whose fast path
+// holds has such a result.
+std::optional<std::pair<APInt, APInt>> getProductBounds(Value value,
+                                                        unsigned width) {
+  auto product = value.getDefiningOp<MulIOp>();
+  if (!product)
+    return std::nullopt;
+  for (unsigned index : {0, 1}) {
+    auto factor = getImmediateOperand(product, index, width);
+    if (!factor)
+      continue;
+    if (factor->isZero())
+      return std::pair(*factor, *factor);
+    auto [low, high] = getFactorRange(*factor, width);
+    APInt first = low * *factor, last = high * *factor;
+    if (first.sgt(last))
+      std::swap(first, last);
+    return std::pair(first, last);
+  }
+  return std::nullopt;
+}
+
 struct AddILowering : FastPathLowering<AddILowering> {
   using FastPathLowering::FastPathLowering;
   using Op = AddIOp;
@@ -140,9 +184,17 @@ struct AddILowering : FastPathLowering<AddILowering> {
   }
 
   static FastPath buildFastPath(PatternRewriter &rewriter, Location loc,
-                                Operation *, ValueRange operands) {
+                                Operation *op, ValueRange operands) {
     Value lhs = operands[0], rhs = operands[1];
     unsigned width = cast<IntegerType>(lhs.getType()).getWidth();
+    for (unsigned index : {0, 1})
+      if (auto addend = getImmediateOperand(op, index, width)) {
+        Value bits = operands[1 - index];
+        std::optional<std::pair<APInt, APInt>> bounds;
+        if (!isReadFromHandle(bits))
+          bounds = getProductBounds(op->getOperand(1 - index), width);
+        return buildConstantSum(rewriter, loc, bits, *addend, bounds);
+      }
     auto checked = bridge::AddSIExtendedOp::create(
         rewriter, loc, lhs.getType(), rewriter.getI1Type(), lhs, rhs);
     Value sum = checked.getSum();
@@ -158,6 +210,41 @@ struct AddILowering : FastPathLowering<AddILowering> {
     auto three = arith::ConstantIntOp::create(rewriter, loc, 3, width);
     auto tagged = arith::XOrIOp::create(rewriter, loc, sum, three);
     return {{tagged}, valid};
+  }
+
+private:
+  // 4*x+1 + 4*c is the tagged sum, so only the tag of x needs a test, and the
+  // sum is immediate iff it does not overflow the word. Adding 4*c leaves the
+  // tag bit unchanged, so the sum's tag is tested: the test then follows the
+  // overflow test, whose flags code generation branches on directly. When
+  // bounds on x, from earlier in a fused chain, keep the sum immediate, it
+  // needs no test.
+  static FastPath
+  buildConstantSum(PatternRewriter &rewriter, Location loc, Value bits,
+                   const APInt &addend,
+                   std::optional<std::pair<APInt, APInt>> bounds) {
+    auto type = cast<IntegerType>(bits.getType());
+    unsigned width = type.getWidth();
+    auto scaled = arith::ConstantOp::create(
+        rewriter, loc, rewriter.getIntegerAttr(type, addend.shl(2)));
+    if (bounds) {
+      // The bounds and the addend are immediate, so their sums fit the word.
+      APInt low = bounds->first + addend, high = bounds->second + addend;
+      if (bridge::fitsImmediate(low, width) &&
+          bridge::fitsImmediate(high, width))
+        return {{arith::AddIOp::create(rewriter, loc, bits, scaled)},
+                arith::ConstantIntOp::create(rewriter, loc, 1, 1)};
+    }
+    auto checked = bridge::AddSIExtendedOp::create(
+        rewriter, loc, bits.getType(), rewriter.getI1Type(), bits, scaled);
+    Value sum = checked.getSum();
+    auto yes = arith::ConstantIntOp::create(rewriter, loc, 1, 1);
+    Value valid =
+        arith::XOrIOp::create(rewriter, loc, checked.getOverflow(), yes);
+    if (isReadFromHandle(bits))
+      valid = arith::AndIOp::create(rewriter, loc, valid,
+                                    hasImmediateTag(rewriter, loc, sum));
+    return {{sum}, valid};
   }
 };
 
@@ -225,9 +312,13 @@ struct MulILowering : FastPathLowering<MulILowering> {
   }
 
   static FastPath buildFastPath(PatternRewriter &rewriter, Location loc,
-                                Operation *, ValueRange operands) {
+                                Operation *op, ValueRange operands) {
     Value lhs = operands[0], rhs = operands[1];
     unsigned width = cast<IntegerType>(lhs.getType()).getWidth();
+    for (unsigned index : {0, 1})
+      if (auto factor = getImmediateOperand(op, index, width))
+        return buildConstantProduct(rewriter, loc, operands[1 - index],
+                                    *factor);
     auto two = arith::ConstantIntOp::create(rewriter, loc, 2, width);
     auto mask = arith::ConstantIntOp::create(rewriter, loc, -4, width);
     auto x = arith::ShRSIOp::create(rewriter, loc, lhs, two);
@@ -244,6 +335,35 @@ struct MulILowering : FastPathLowering<MulILowering> {
     auto one = arith::ConstantIntOp::create(rewriter, loc, 1, width);
     auto tagged =
         arith::OrIOp::create(rewriter, loc, product.getProduct(), one);
+    return {{tagged}, valid};
+  }
+
+private:
+  // c * (4*x+1) - (c-1) = 4*(c*x)+1, so the tagged product needs no checked
+  // multiplication: c*x is immediate iff x lies in a range fixed by c, which
+  // one unsigned comparison tests. The word arithmetic wraps, and is exact
+  // whenever the product is immediate.
+  static FastPath buildConstantProduct(PatternRewriter &rewriter, Location loc,
+                                       Value bits, const APInt &factor) {
+    auto type = cast<IntegerType>(bits.getType());
+    unsigned width = type.getWidth();
+    auto constant = [&](const APInt &value) -> Value {
+      return arith::ConstantOp::create(rewriter, loc,
+                                       rewriter.getIntegerAttr(type, value));
+    };
+    Value valid = allImmediate(rewriter, loc, bits);
+    if (factor.isZero())
+      return {{constant(APInt(width, 1))}, valid};
+    auto [low, high] = getFactorRange(factor, width);
+    Value x =
+        arith::ShRSIOp::create(rewriter, loc, bits, constant(APInt(width, 2)));
+    auto offset = arith::SubIOp::create(rewriter, loc, x, constant(low));
+    auto inRange = arith::CmpIOp::create(
+        rewriter, loc, arith::CmpIPredicate::ule, offset, constant(high - low));
+    valid = arith::AndIOp::create(rewriter, loc, valid, inRange);
+    auto scaled = arith::MulIOp::create(rewriter, loc, bits, constant(factor));
+    auto tagged =
+        arith::SubIOp::create(rewriter, loc, scaled, constant(factor - 1));
     return {{tagged}, valid};
   }
 };
@@ -839,6 +959,8 @@ struct DivisionLowering : FastPathLowering<Derived> {
 
   static FastPath buildFastPath(PatternRewriter &rewriter, Location loc,
                                 Operation *op, ValueRange operands) {
+    if (cast<typename Derived::Op>(op).getNonnegative())
+      return buildUnsignedFastPath(rewriter, loc, op, operands);
     DivZero divZero = getDivZero(op);
     bool exact = isExact(op);
     Value lhs = operands[0], rhs = operands[1];
@@ -969,6 +1091,55 @@ struct DivisionLowering : FastPathLowering<Derived> {
     }
     if (remainder)
       fast.values.push_back(tag(r));
+    fast.valid = valid;
+    return fast;
+  }
+
+private:
+  // Nonnegative immediates untag by a logical shift and divide unsigned, which
+  // every rounding agrees with. Quotients and remainders are no larger than
+  // the dividend, so they stay immediate.
+  static FastPath buildUnsignedFastPath(PatternRewriter &rewriter, Location loc,
+                                        Operation *op, ValueRange operands) {
+    DivZero divZero = getDivZero(op);
+    Value lhs = operands[0], rhs = operands[1];
+    auto type = cast<IntegerType>(lhs.getType());
+    auto constant = [&](const APInt &value) -> Value {
+      return arith::ConstantOp::create(rewriter, loc,
+                                       rewriter.getIntegerAttr(type, value));
+    };
+    unsigned width = type.getWidth();
+    Value two = constant(APInt(width, 2)), one = constant(APInt(width, 1));
+    // Heap handles are nonzero after the shift, so only an immediate zero
+    // divides by zero.
+    Value x = arith::ShRUIOp::create(rewriter, loc, lhs, two);
+    Value y = arith::ShRUIOp::create(rewriter, loc, rhs, two);
+    Value valid =
+        FastPathLowering<Derived>::allImmediate(rewriter, loc, {lhs, rhs});
+    // A trapping division replaces a zero divisor by one and leaves zero to
+    // the runtime. A lean one replaces it by the largest word, which exceeds
+    // every untagged handle, so the quotient is zero and the remainder x, as
+    // lean requires.
+    if (divZero != DivZero::undefined) {
+      Value nonzero =
+          arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::ne, y,
+                                constant(APInt(width, 0)));
+      Value replacement =
+          divZero == DivZero::trap ? one : constant(APInt::getAllOnes(width));
+      y = arith::SelectOp::create(rewriter, loc, nonzero, y, replacement);
+      if (divZero == DivZero::trap)
+        valid = arith::AndIOp::create(rewriter, loc, valid, nonzero);
+    }
+    auto tag = [&](Value value) -> Value {
+      auto scaled = arith::ShLIOp::create(rewriter, loc, value, two);
+      return arith::OrIOp::create(rewriter, loc, scaled, one);
+    };
+    FastPath fast;
+    if (quotient)
+      fast.values.push_back(
+          tag(arith::DivUIOp::create(rewriter, loc, x, y, isExact(op))));
+    if (remainder)
+      fast.values.push_back(tag(arith::RemUIOp::create(rewriter, loc, x, y)));
     fast.valid = valid;
     return fast;
   }
@@ -1646,7 +1817,8 @@ struct FPToSILowering : OpRewritePattern<FPToSIOp> {
     auto magnitude = math::AbsFOp::create(rewriter, loc, value);
     auto small = arith::CmpFOp::create(rewriter, loc, arith::CmpFPredicate::OLT,
                                        magnitude, bound);
-    auto branch = scf::IfOp::create(rewriter, loc, TypeRange{type}, small,
+    auto branch = scf::IfOp::create(rewriter, loc, TypeRange{type},
+                                    expectFast(rewriter, loc, small),
                                     /*withElseRegion=*/true);
     rewriter.setInsertionPointToStart(&branch.getThenRegion().front());
     Value integer = arith::FPToSIOp::create(rewriter, loc, word, value);
@@ -1935,9 +2107,9 @@ void fuseChain(Operation *root, PatternRewriter &rewriter,
                   : fast.valid;
   }
 
-  auto branch =
-      scf::IfOp::create(rewriter, loc, ValueRange(outputs).getTypes(), valid,
-                        /*withElseRegion=*/true);
+  auto branch = scf::IfOp::create(rewriter, loc, ValueRange(outputs).getTypes(),
+                                  expectFast(rewriter, loc, valid),
+                                  /*withElseRegion=*/true);
   rewriter.setInsertionPointToStart(&branch.getThenRegion().front());
   SmallVector<Value> fastResults;
   for (Value output : outputs)
@@ -1949,9 +2121,13 @@ void fuseChain(Operation *root, PatternRewriter &rewriter,
                               : bits[output]);
   scf::YieldOp::create(rewriter, loc, fastResults);
   rewriter.setInsertionPointToStart(&branch.getElseRegion().front());
+  // Inline fast paths here would mostly fail again, and code generation would
+  // merge their tests with the chain's, which keeps it from branching on each
+  // test, so the slow path only calls the runtime.
   IRMapping mapping;
   for (Operation *op : order)
-    rewriter.clone(*op, mapping);
+    rewriter.clone(*op, mapping)
+        ->setAttr(runtimeOnlyAttrName, rewriter.getUnitAttr());
   for (Operation *release : releases) {
     rewriter.clone(*release, mapping);
     rewriter.eraseOp(release);

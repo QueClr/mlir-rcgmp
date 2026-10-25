@@ -20,6 +20,8 @@ void *add_local(void *, void *);
 void *add_atomic(void *, void *);
 void *double_local(void *);
 void *double_atomic(void *);
+void *add_five(void *);
+void *subtract_five(void *);
 }
 
 namespace {
@@ -64,6 +66,24 @@ TEST_P(AdditionTest, AddsBoundaries) {
   for (const auto &[lhs, rhs, sharing] :
        std::views::cartesian_product(boundaries, boundaries, sharings))
     checkBinary(additions[atomic], mpz_add, lhs, rhs, counting, sharing);
+}
+
+// Constant addends carry values across either bound of the immediate range.
+TEST(Addition, AddsConstantsAcrossBoundaries) {
+  AllocationCounter allocations;
+  std::vector<Integer> values{Integer(0), Integer::powerOfTwo(128)};
+  for (long delta : {-6L, -5L, -1L, 0L, 1L, 5L, 6L}) {
+    values.push_back(Integer(Handle::immediateMin) + delta);
+    values.push_back(Integer(Handle::immediateMax) + delta);
+  }
+  for (const Integer &x : values)
+    for (auto [addConstant, addend] :
+         {std::pair{add_five, 5L}, {subtract_five, -5L}}) {
+      void *sum = addConstant(toRuntime(x));
+      EXPECT_THAT(sum, Represents(x + addend)) << x << " + " << addend;
+      rcgmp_mpz_release(sum, 0);
+    }
+  EXPECT_TRUE(allocations.balanced());
 }
 
 // A heap operand holds the sum with a small one, which is never boxed.

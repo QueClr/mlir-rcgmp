@@ -32,6 +32,7 @@
 // LLVM: llvm.extractvalue %[[PAIR]][1]
 // LLVM: llvm.xor
 // LLVM: llvm.and
+// LLVM: llvm.intr.expect
 // LLVM: llvm.cond_br
 // LLVM: llvm.inttoptr
 // LLVM: llvm.load
@@ -58,4 +59,24 @@ func.func @double_atomic(%x: !rcgmp.mpz<atomic>) -> !rcgmp.mpz<atomic> {
   rcgmp.retain %x : !rcgmp.mpz<atomic>
   %r = rcgmp.addi %x, %x : !rcgmp.mpz<atomic>
   return %r : !rcgmp.mpz<atomic>
+}
+
+// A constant addend, on either side, is added to the other operand scaled, and
+// leaves its tag, which the sum keeps, as the only tag to test.
+// SCF-LABEL: func.func @add_five
+// SCF: %[[X:.*]] = rcgmp.bridge.mpz.to_bits %arg0
+// SCF: %[[TWENTY:.*]] = arith.constant 20 : i64
+// SCF: %[[SUM:.*]], %[[OVERFLOW:.*]] = rcgmp.bridge.addsi_extended %[[X]], %[[TWENTY]]
+// SCF: arith.andi %[[SUM]]
+// SCF: rcgmp.bridge.expect
+// SCF: rcgmp.bridge.mpz.from_bits %[[SUM]]
+func.func @add_five(%x: !rcgmp.mpz) -> !rcgmp.mpz {
+  %five = rcgmp.constant 5 : !rcgmp.mpz
+  %r = rcgmp.addi %five, %x : !rcgmp.mpz
+  return %r : !rcgmp.mpz
+}
+func.func @subtract_five(%x: !rcgmp.mpz) -> !rcgmp.mpz {
+  %five = rcgmp.constant -5 : !rcgmp.mpz
+  %r = rcgmp.addi %x, %five : !rcgmp.mpz
+  return %r : !rcgmp.mpz
 }

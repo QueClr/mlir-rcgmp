@@ -291,14 +291,23 @@ defvar RCGMP_DivZeroDescription = [{
     ```mlir
     %r = rcgmp.remsi %x, %y divzero<lean> : !rcgmp.mpz
     ```
+
+    With `nonnegative`, both operands must be nonnegative, and otherwise the
+    results are undefined. A natural-number division sets it, which lets the
+    division of immediates be unsigned. Every rounding then agrees.
+
+    ```mlir
+    %q = rcgmp.divsi %x, %y nonnegative divzero<lean> : !rcgmp.mpz
+    ```
   }];
 
 class RCGMP_DivisionOp<string name, string semantics>
     : RCGMPOp<name, [SameOperandsAndResultType, RCGMP_NotSpeculatable]> {
-  let arguments = RCGMP_DivisionArguments;
+  let arguments = !con(RCGMP_DivisionArguments, (ins UnitAttr:$nonnegative));
   let results = (outs Res<RCGMP_MpzType, "new integer", [MemAlloc]>:$result);
   let assemblyFormat = [{
-    $lhs `,` $rhs (`divzero` `` $divZero^)? attr-dict `:` type($result)
+    $lhs `,` $rhs (`nonnegative` $nonnegative^)? (`divzero` `` $divZero^)?
+    attr-dict `:` type($result)
   }];
   let description =
       RCGMP_DivisionDescription # semantics # RCGMP_DivZeroDescription;
@@ -322,10 +331,11 @@ defvar RCGMP_ExactDescription = [{
 
 class RCGMP_QuotientOp<string name, string semantics>
     : RCGMP_DivisionOp<name, semantics> {
-  let arguments = !con(RCGMP_DivisionArguments, (ins UnitAttr:$exact));
+  let arguments = !con(RCGMP_DivisionArguments,
+                       (ins UnitAttr:$exact, UnitAttr:$nonnegative));
   let assemblyFormat = [{
-    $lhs `,` $rhs (`exact` $exact^)? (`divzero` `` $divZero^)? attr-dict `:`
-    type($result)
+    $lhs `,` $rhs (`exact` $exact^)? (`nonnegative` $nonnegative^)?
+    (`divzero` `` $divZero^)? attr-dict `:` type($result)
   }];
   let description = RCGMP_DivisionDescription # semantics #
                     RCGMP_DivZeroDescription # RCGMP_ExactDescription;
@@ -377,11 +387,12 @@ def RCGMP_EModSIOp : RCGMP_DivisionOp<"emodsi", [{
 
 class RCGMP_DivisionPairOp<string name, string semantics>
     : RCGMPOp<name, [SameOperandsAndResultType, RCGMP_NotSpeculatable]> {
-  let arguments = RCGMP_DivisionArguments;
+  let arguments = !con(RCGMP_DivisionArguments, (ins UnitAttr:$nonnegative));
   let results = (outs Res<RCGMP_MpzType, "new quotient", [MemAlloc]>:$quotient,
                       Res<RCGMP_MpzType, "new remainder", [MemAlloc]>:$remainder);
   let assemblyFormat = [{
-    $lhs `,` $rhs (`divzero` `` $divZero^)? attr-dict `:` type($quotient)
+    $lhs `,` $rhs (`nonnegative` $nonnegative^)? (`divzero` `` $divZero^)?
+    attr-dict `:` type($quotient)
   }];
   let description =
       RCGMP_DivisionDescription # semantics # RCGMP_DivZeroDescription;

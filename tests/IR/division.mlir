@@ -30,3 +30,18 @@ func.func @divisions(%a: !rcgmp.mpz, %b: !rcgmp.mpz, %c: !rcgmp.mpz,
   rcgmp.release %er2 : !rcgmp.mpz<atomic>
   return
 }
+
+// nonnegative follows exact and precedes the zero-divisor mode.
+// CHECK-LABEL: func.func @nonnegative
+// CHECK: rcgmp.divsi %{{[^ ]*}}, %{{[^ ]*}} exact nonnegative divzero<lean> : !rcgmp.mpz
+// CHECK: rcgmp.remsi %{{[^ ]*}}, %{{[^ ]*}} nonnegative : !rcgmp.mpz
+// CHECK: rcgmp.edivmodsi %{{[^ ]*}}, %{{[^ ]*}} nonnegative divzero<undefined> : !rcgmp.mpz
+func.func @nonnegative(%a: !rcgmp.mpz, %b: !rcgmp.mpz, %c: !rcgmp.mpz,
+                       %d: !rcgmp.mpz) {
+  %q = rcgmp.divsi %a, %b exact nonnegative divzero<lean> : !rcgmp.mpz
+  %r = rcgmp.remsi %q, %c nonnegative : !rcgmp.mpz
+  %eq, %er = rcgmp.edivmodsi %r, %d nonnegative divzero<undefined> : !rcgmp.mpz
+  rcgmp.release %eq : !rcgmp.mpz
+  rcgmp.release %er : !rcgmp.mpz
+  return
+}

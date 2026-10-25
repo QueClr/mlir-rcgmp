@@ -100,7 +100,8 @@
 // SCF: %[[DIVISOR:.*]] = arith.select %[[NONZERO]], %[[Y]], %[[MIN]]
 // SCF: arith.divsi %{{.*}}, %[[DIVISOR]]
 // SCF: %[[VALID:.*]] = arith.andi %[[IMMEDIATE]], %{{.*}} : i1
-// SCF: scf.if %[[VALID]]
+// SCF: %[[LIKELY:.*]] = rcgmp.bridge.expect %[[VALID]], true
+// SCF: scf.if %[[LIKELY]]
 // SCF: func.call @rcgmp_mpz_tdiv_q_lean(
 
 // Floored and Euclidean division adjust the remainder by the zero divisor
@@ -282,4 +283,35 @@ func.func @edivmodsi_lean_local(%x: !rcgmp.mpz, %y: !rcgmp.mpz) -> (!rcgmp.mpz, 
 func.func @edivmodsi_lean_atomic(%x: !rcgmp.mpz<atomic>, %y: !rcgmp.mpz<atomic>) -> (!rcgmp.mpz<atomic>, !rcgmp.mpz<atomic>) {
   %q, %r = rcgmp.edivmodsi %x, %y divzero<lean> : !rcgmp.mpz<atomic>
   return %q, %r : !rcgmp.mpz<atomic>, !rcgmp.mpz<atomic>
+}
+
+// Nonnegative operands untag by a logical shift and divide unsigned. No
+// quotient leaves the immediate range, and every rounding agrees.
+// SCF-LABEL: func.func @divremsi_nonnegative
+// SCF: arith.shrui
+// SCF: arith.shrui
+// SCF-NOT: arith.shrsi
+// SCF: arith.divui
+// SCF: arith.remui
+// SCF-NOT: arith.divsi
+// SCF: rcgmp.bridge.expect
+func.func @divremsi_nonnegative(%x: !rcgmp.mpz, %y: !rcgmp.mpz) -> (!rcgmp.mpz, !rcgmp.mpz) {
+  %q, %r = rcgmp.divremsi %x, %y nonnegative : !rcgmp.mpz
+  return %q, %r : !rcgmp.mpz, !rcgmp.mpz
+}
+func.func @divremsi_nonnegative_lean(%x: !rcgmp.mpz, %y: !rcgmp.mpz) -> (!rcgmp.mpz, !rcgmp.mpz) {
+  %q, %r = rcgmp.divremsi %x, %y nonnegative divzero<lean> : !rcgmp.mpz
+  return %q, %r : !rcgmp.mpz, !rcgmp.mpz
+}
+// SCF-LABEL: func.func @edivmodsi_nonnegative
+// SCF-NOT: arith.shrsi
+// SCF: arith.divui
+func.func @edivmodsi_nonnegative(%x: !rcgmp.mpz, %y: !rcgmp.mpz) -> (!rcgmp.mpz, !rcgmp.mpz) {
+  %q, %r = rcgmp.edivmodsi %x, %y nonnegative : !rcgmp.mpz
+  return %q, %r : !rcgmp.mpz, !rcgmp.mpz
+}
+func.func @remsi_nonnegative_by_prime(%x: !rcgmp.mpz) -> !rcgmp.mpz {
+  %c = rcgmp.constant 1000000007 : !rcgmp.mpz
+  %r = rcgmp.remsi %x, %c nonnegative : !rcgmp.mpz
+  return %r : !rcgmp.mpz
 }
