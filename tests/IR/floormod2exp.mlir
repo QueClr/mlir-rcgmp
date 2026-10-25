@@ -88,6 +88,46 @@ func.func @remainders(%x: !rcgmp.mpz, %y: !rcgmp.mpz, %z: !rcgmp.mpz, %w: !rcgmp
   return %a, %b, %c, %d, %e : !rcgmp.mpz, !rcgmp.mpz, !rcgmp.mpz, !rcgmp.mpz, !rcgmp.mpz
 }
 
+// Truncated and floored remainders by plus or minus 2^k that are only compared
+// with zero, on either side, or released, take the low k bits. A remainder
+// used otherwise, compared with nonzero or ordered, or by another divisor,
+// divides.
+// CHECK-LABEL: func.func @zero_tests
+// CHECK-SAME: (%[[X:.*]]: !rcgmp.mpz, %[[Y:.*]]: !rcgmp.mpz, %[[Z:.*]]: !rcgmp.mpz, %[[W:.*]]: !rcgmp.mpz, %[[V:.*]]: !rcgmp.mpz)
+// CHECK-DAG: %[[C1:.*]] = arith.constant 1 : i64
+// CHECK-DAG: %[[C3:.*]] = arith.constant 3 : i64
+// CHECK-DAG: %[[A:.*]] = rcgmp.floormod2expi %[[X]], %[[C1]] : !rcgmp.mpz, i64
+// CHECK-DAG: %[[B:.*]] = rcgmp.floormod2expi %[[Y]], %[[C3]] : !rcgmp.mpz, i64
+// CHECK-DAG: %[[C:.*]] = rcgmp.remsi %[[Z]], %{{.*}} : !rcgmp.mpz
+// CHECK-DAG: %[[D:.*]] = rcgmp.remsi %[[W]], %{{.*}} : !rcgmp.mpz
+// CHECK-DAG: %[[E:.*]] = rcgmp.remsi %[[V]], %{{.*}} : !rcgmp.mpz
+// CHECK-DAG: rcgmp.cmpi eq, %[[A]]
+// CHECK-DAG: rcgmp.release %[[A]]
+// CHECK-DAG: rcgmp.cmpi ne, {{.*}}%[[B]]
+// CHECK-DAG: rcgmp.release %[[B]]
+// CHECK: return {{.*}}, %[[C]]
+func.func @zero_tests(%x: !rcgmp.mpz, %y: !rcgmp.mpz, %z: !rcgmp.mpz, %w: !rcgmp.mpz, %v: !rcgmp.mpz) -> (i1, i1, i1, i1, !rcgmp.mpz) {
+  %zero = rcgmp.constant 0 : !rcgmp.mpz
+  %one = rcgmp.constant 1 : !rcgmp.mpz
+  %two = rcgmp.constant 2 : !rcgmp.mpz
+  %m8 = rcgmp.constant -8 : !rcgmp.mpz
+  %six = rcgmp.constant 6 : !rcgmp.mpz
+  %a = rcgmp.remsi %x, %two : !rcgmp.mpz
+  %ta = rcgmp.cmpi eq, %a, %zero : !rcgmp.mpz
+  rcgmp.release %a : !rcgmp.mpz
+  %b = rcgmp.floormodsi %y, %m8 : !rcgmp.mpz
+  %tb = rcgmp.cmpi ne, %zero, %b : !rcgmp.mpz
+  rcgmp.release %b : !rcgmp.mpz
+  %c = rcgmp.remsi %z, %two : !rcgmp.mpz
+  %d = rcgmp.remsi %w, %two : !rcgmp.mpz
+  %td = rcgmp.cmpi slt, %d, %zero : !rcgmp.mpz
+  rcgmp.release %d : !rcgmp.mpz
+  %e = rcgmp.remsi %v, %six : !rcgmp.mpz
+  %te = rcgmp.cmpi eq, %e, %one : !rcgmp.mpz
+  rcgmp.release %e : !rcgmp.mpz
+  return %ta, %tb, %td, %te, %c : i1, i1, i1, i1, !rcgmp.mpz
+}
+
 // A shift of one used again keeps its reference for that use, and a shift of
 // another integer is not a power of two.
 // CHECK-LABEL: func.func @shared_shift
