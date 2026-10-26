@@ -6,6 +6,8 @@
 #include <gtest/gtest.h>
 
 #include <array>
+#include <cstddef>
+#include <cstdint>
 #include <ranges>
 #include <string>
 #include <string_view>
@@ -294,6 +296,79 @@ TEST_P(DivisionTest, ReusesUniqueDividend) {
     rounding.oracle(q, r, lhs, divisor);
     EXPECT_THAT(result, Represents(quotient ? q : r));
     rcgmp_mpz_release(result, atomic);
+  }
+}
+
+// An integer of count words, which seed shifts among arbitrary words and runs
+// of zeros and ones. The top bit is set, so even one word is not immediate.
+Integer longInteger(std::size_t count, std::size_t seed,
+                    bool negative = false) {
+  std::vector<std::uintptr_t> words(count);
+  for (auto [index, limb] : std::views::enumerate(words)) {
+    std::size_t position = index + seed;
+    limb = position % 3 == 0   ? 0
+           : position % 3 == 1 ? ~std::uintptr_t{0}
+                               : position * 0x9e3779b97f4a7c15;
+  }
+  words.back() |= std::uintptr_t{1} << (word - 1);
+  return Integer::fromWords(words, negative);
+}
+
+// Dividends of up to 130 limbs by divisors of up to 64, of either sign, each
+// result alone and both together, with a unique or a shared dividend. A
+// quotient alone that no rounding moves from the truncated one skips the
+// remainder where that pays off; the others compute both.
+TEST_P(DivisionTest, MatchesGmpOnLongOperands) {
+  constexpr std::array<std::size_t, 8> lhsCounts{1, 2, 3, 15, 16, 17, 40, 130};
+  constexpr std::array<std::size_t, 7> rhsCounts{1, 2, 3, 15, 16, 20, 64};
+  constexpr std::array signs{false, true};
+  for (auto [lhsCount, rhsCount, lhsNegative, rhsNegative, shared, lean] :
+       std::views::cartesian_product(lhsCounts, rhsCounts, signs, signs, signs,
+                                     signs))
+    checkDivision(rounding, longInteger(lhsCount, 1, lhsNegative),
+                  longInteger(rhsCount, 2, rhsNegative), counting, shared,
+                  lean);
+}
+
+// Dividends of the divisor's length just below, at, and just above it in
+// magnitude: a smaller one is its own remainder, or has the remainder |d| - |n|
+// after rounding, and its quotient is zero or one in magnitude.
+TEST_P(DivisionTest, MatchesGmpOnDividendsNearDivisor) {
+  constexpr std::array signs{false, true};
+  for (std::size_t count : {1, 2, 3, 16}) {
+    Integer divisor = longInteger(count, 2);
+    for (auto [delta, lhsNegative, rhsNegative, shared] :
+         std::views::cartesian_product(std::array{-2L, -1L, 0L, 1L}, signs,
+                                       signs, signs)) {
+      Integer lhs = divisor + delta;
+      checkDivision(rounding, lhsNegative ? -lhs : lhs,
+                    rhsNegative ? -divisor : divisor, counting, shared);
+    }
+  }
+}
+
+// The shapes around the quotient-only division: quotients of 2, 3, 4 * dn and
+// 4 * dn + 1 limbs, at the edges of its use; quotients much shorter than the
+// divisor, which GMP approximates from the high limbs; and a divisor whose top
+// limb is small, which GMP shifts. Each dividend is also replaced by a multiple
+// of the divisor, whose remainder is zero.
+TEST_P(DivisionTest, MatchesGmpOnQuotientOnlyShapes) {
+  constexpr std::array<std::pair<std::size_t, std::size_t>, 7> shapes{
+      {{17, 16}, {18, 16}, {79, 16}, {80, 16}, {24, 22}, {512, 500}, {40, 20}}};
+  constexpr std::array signs{false, true};
+  for (auto [shape, small, lhsNegative, rhsNegative, shared, lean] :
+       std::views::cartesian_product(shapes, signs, signs, signs, signs,
+                                     signs)) {
+    auto [lhsCount, rhsCount] = shape;
+    std::vector<std::uintptr_t> words = longInteger(rhsCount, 2).words();
+    if (small)
+      words.back() = 5;
+    Integer divisor = Integer::fromWords(words, rhsNegative);
+    Integer lhs = longInteger(lhsCount, 1, lhsNegative), multiple;
+    mpz_mul(multiple, longInteger(lhsCount - rhsCount, 4, lhsNegative),
+            divisor);
+    for (const Integer &dividend : {lhs, multiple})
+      checkDivision(rounding, dividend, divisor, counting, shared, lean);
   }
 }
 

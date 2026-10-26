@@ -34,6 +34,33 @@ inline Handle fromInteger(std::intptr_t value) {
   return fromWords(std::span(&magnitude, 1), negative);
 }
 
+// Whether mpz_tdiv_q, which computes a quotient of qn limbs by a divisor of dn
+// limbs without most of the remainder, is faster than mpn_tdiv_qr. It costs a
+// few hundred instructions more to call, for the quotient it allocates and
+// rcgmp copies, so it pays off only for divisors of 16 limbs or more. It also
+// needs a quotient of 3 limbs or more, and saves little on one more than 4
+// times longer than the divisor, whose division the remainder hardly slows.
+constexpr bool skipsRemainder(std::size_t qn, std::size_t dn) {
+  return dn >= 16 && qn >= 3 && qn <= 4 * dn;
+}
+
+// The truncated quotient of magnitudes, with the given sign, from mpz_tdiv_q
+// on read-only views of them. GMP allocates the quotient, which is copied
+// out, as mpz_tdiv_q may reallocate its destination with GMP's allocation
+// functions, which must not see storage from rcgmp's allocation hooks. Kept
+// out of line, its GMP integers take no stack in divide's other paths.
+[[gnu::noinline]] Handle quotientOnly(std::span<const Limb> n,
+                                      std::span<const Limb> d, bool negative) {
+  mpz_t dividend, divisor, quotient;
+  mpz_init(quotient);
+  mpz_tdiv_q(quotient, mpz_roinit_n(dividend, n.data(), n.size()),
+             mpz_roinit_n(divisor, d.data(), d.size()));
+  Handle result = fromWords(
+      std::span(mpz_limbs_read(quotient), mpz_size(quotient)), negative);
+  mpz_clear(quotient);
+  return result;
+}
+
 // Divides lhs by rhs, computing the requested results. Truncating division
 // rounds the quotient toward zero, and the remainder has the sign of lhs.
 // Floor division rounds it toward negative infinity, and the remainder has the
@@ -97,8 +124,9 @@ Division divide(Handle lhs, Handle rhs, Reuse reuse) {
     return operand.heap();
   };
 
-  if (nn < dn) {
-    // The quotient is zero, or one of its sign after adjustment.
+  if (nn < dn || (nn == dn && mpn_cmp(np, dp, nn) < 0)) {
+    // |n| < |d|, so the quotient is zero, or one of its sign after
+    // adjustment.
     bool adjust = adjusts(nn != 0);
     result.quotient = Handle::immediate(adjust ? negative ? -1 : 1 : 0);
     if (wantRemainder && !adjust) {
@@ -106,10 +134,11 @@ Division divide(Handle lhs, Handle rhs, Reuse reuse) {
       keepLhs = true;
     } else if (wantRemainder) {
       // |d| - |n|. Subtracting in the lhs storage replaces each limb of n
-      // only after reading it.
-      Mpz &out = reuse.rhs                                ? take(keepRhs, rhs)
-                 : reuse.lhs && lhs.heap().capacity >= dn ? take(keepLhs, lhs)
-                                                          : allocateResult(dn);
+      // only after reading it. A unique dividend with room holds the
+      // remainder, as it does for longer dividends.
+      Mpz &out = reuse.lhs && lhs.heap().capacity >= dn ? take(keepLhs, lhs)
+                 : reuse.rhs                            ? take(keepRhs, rhs)
+                                                        : allocateResult(dn);
       Limb *rp = out.limbs().data();
       Limb borrow = mpn_sub_n(rp, dp, np, nn);
       if (dn > nn)
@@ -152,6 +181,11 @@ Division divide(Handle lhs, Handle rhs, Reuse reuse) {
         result.remainder = Handle(out);
       }
     }
+  } else if (!wantRemainder && !adjusts(true) &&
+             skipsRemainder(nn - dn + 1, dn)) {
+    // A quotient that no rounding moves from the truncated one needs no
+    // remainder, which mpz_tdiv_q mostly skips computing.
+    result.quotient = quotientOnly(n.limbs, d.limbs, negative);
   } else {
     std::size_t qn = nn - dn + 1;
     // mpn_tdiv_qr may write the remainder over the dividend, but no result
